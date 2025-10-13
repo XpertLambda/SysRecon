@@ -328,7 +328,7 @@ For enterprise deployments, please contact us for commercial licensing options t
 - **Documentation**: [docs/](docs/)
 - **Issues**: [GitHub Issues](https://github.com/your-org/sysrecon/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/your-org/sysrecon/discussions)
-- **Email**: security@sysrecon.com
+- **Discord**: thelambda
 
 ## 📄 License
 
