@@ -1,0 +1,28 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Build SysRecon (Cross-compile for Windows)",
+			"type": "shell",
+			"command": "cmake",
+			"args": [
+				"-DCMAKE_TOOLCHAIN_FILE=cmake/mingw-w64-x86_64.cmake",
+				"-DCMAKE_BUILD_TYPE=Release",
+				"-S",
+				".",
+				"-B",
+				"build",
+				"&&",
+				"make",
+				"-C",
+				"build",
+				"-j4"
+			],
+			"group": "build",
+			"problemMatcher": [
+				"$gcc"
+			],
+			"isBackground": false
+		}
+	]
+}

@@ -1,0 +1,99 @@
+# SysRecon Native Linux Build Makefile (for demonstration)
+# This builds a Linux version for testing the code structure
+
+# Compiler and tools
+CXX = g++
+AR = ar
+
+# Project configuration
+PROJECT_NAME = sysrecon
+VERSION = 1.0.0
+TARGET = $(PROJECT_NAME)
+
+# Directories
+SRC_DIR = src
+INCLUDE_DIR = include
+BUILD_DIR = build
+OBJ_DIR = $(BUILD_DIR)/obj
+
+# Compiler flags
+CXXFLAGS = -std=c++20 -Wall -Wextra -Wpedantic
+CXXFLAGS += -DSYSRECON_VERSION=\"$(VERSION)\"
+CXXFLAGS += -I$(INCLUDE_DIR)
+
+# Linker flags
+LDFLAGS = -static-libgcc -static-libstdc++
+
+# Libraries (Linux equivalents for testing)
+LIBS = -lpthread
+
+# Build configuration
+ifeq ($(DEBUG),1)
+    CXXFLAGS += -g -O0 -DDEBUG
+    BUILD_TYPE = debug
+else
+    CXXFLAGS += -O3 -DNDEBUG
+    BUILD_TYPE = release
+endif
+
+# Source files
+SOURCES = $(wildcard $(SRC_DIR)/*.cpp) \
+          $(wildcard $(SRC_DIR)/core/*.cpp) \
+          $(SRC_DIR)/modules_placeholder.cpp
+
+# Generate object file names
+OBJECTS = $(SOURCES:%.cpp=$(OBJ_DIR)/%.o)
+
+# Create necessary directories
+$(shell mkdir -p $(BUILD_DIR) $(OBJ_DIR) $(OBJ_DIR)/$(SRC_DIR) $(OBJ_DIR)/$(SRC_DIR)/core)
+
+# Default target
+.PHONY: all
+all: $(BUILD_DIR)/$(TARGET)
+
+# Build the main executable
+$(BUILD_DIR)/$(TARGET): $(OBJECTS)
+	@echo "Linking $(TARGET)..."
+	$(CXX) $(OBJECTS) -o $@ $(LDFLAGS) $(LIBS)
+	@echo "Build complete: $@"
+
+# Compile source files
+$(OBJ_DIR)/%.o: %.cpp
+	@echo "Compiling $<..."
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+# Clean build artifacts
+.PHONY: clean
+clean:
+	@echo "Cleaning build directory..."
+	rm -rf $(BUILD_DIR)
+
+# Show build information
+.PHONY: info
+info:
+	@echo "SysRecon Build Information (Linux Native)"
+	@echo "========================================"
+	@echo "Project: $(PROJECT_NAME)"
+	@echo "Version: $(VERSION)"
+	@echo "Target: $(TARGET)"
+	@echo "Build Type: $(BUILD_TYPE)"
+	@echo "Compiler: $(CXX)"
+	@echo "Flags: $(CXXFLAGS)"
+	@echo "Sources: $(words $(SOURCES)) files"
+
+# Help target
+.PHONY: help
+help:
+	@echo "SysRecon Linux Build Makefile"
+	@echo "============================="
+	@echo ""
+	@echo "This builds a Linux version for code testing"
+	@echo "For Windows builds, use the Windows Makefile"
+	@echo ""
+	@echo "Targets:"
+	@echo "  all        - Build the project (default)"
+	@echo "  debug      - Build with debug information"
+	@echo "  clean      - Remove build artifacts"
+	@echo "  info       - Show build information"
+	@echo "  help       - Show this help message"
