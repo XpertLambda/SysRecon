@@ -1,0 +1,68 @@
+{
+    "general": {
+        "verbose_output": false,
+        "stealth_mode": false,
+        "require_admin": true,
+        "max_threads": 4,
+        "timeout_seconds": 300
+    },
+    "modules": {
+        "accounts": {
+            "enabled": true,
+            "enumerate_groups": true,
+            "check_passwords": false,
+            "analyze_permissions": true
+        },
+        "services": {
+            "enabled": true,
+            "analyze_startup": true,
+            "check_dependencies": true,
+            "verify_signatures": false
+        },
+        "processes": {
+            "enabled": true,
+            "analyze_memory": false,
+            "check_dlls": true,
+            "detect_injection": true
+        },
+        "network": {
+            "enabled": true,
+            "scan_listening_ports": true,
+            "analyze_connections": true,
+            "resolve_hostnames": false
+        },
+        "registry": {
+            "enabled": true,
+            "scan_startup_keys": true,
+            "analyze_policies": true,
+            "check_permissions": true,
+            "custom_keys": [
+                "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce",
+                "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                "HKLM\\System\\CurrentControlSet\\Services"
+            ]
+        },
+        "memory": {
+            "enabled": false,
+            "create_dumps": false,
+            "analyze_heap": false,
+            "scan_for_malware": true,
+            "max_dump_size_mb": 100
+        }
+    },
+    "output": {
+        "output_directory": "./reports",
+        "generate_json": true,
+        "generate_csv": true,
+        "generate_html": true,
+        "generate_pdf": false,
+        "compress_output": true
+    },
+    "security": {
+        "encrypt_output": false,
+        "encryption_key": "",
+        "sign_reports": false,
+        "signing_cert": ""
+    }
+}
