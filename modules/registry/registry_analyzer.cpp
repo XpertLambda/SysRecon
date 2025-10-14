@@ -1,7 +1,4 @@
-#include "../../include/m    SYSRECON_LOG_INFO(L"Analyzing registry entries...");
-    
-#ifdef _WIN32
-    SYSRECON_LOG_WARNING(L"Registry analysis not yet implemented");s/registry/registry_analyzer.h"
+#include "../../include/modules/registry/registry_analyzer.h"
 
 namespace SysRecon {
 namespace Modules {

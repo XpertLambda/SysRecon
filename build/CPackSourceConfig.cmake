@@ -28,7 +28,7 @@ set(CPACK_IGNORE_FILES "/CVS/;/\\.svn/;/\\.bzr/;/\\.hg/;/\\.git/;\\.swp\$;\\.#;/
 set(CPACK_INNOSETUP_ARCHITECTURE "x64")
 set(CPACK_INSTALLED_DIRECTORIES "/home/xpert/Desktop/Projects/SysRecon;/")
 set(CPACK_INSTALL_CMAKE_PROJECTS "")
-set(CPACK_INSTALL_PREFIX "/usr/local")
+set(CPACK_INSTALL_PREFIX "/home/xpert/Desktop/Projects/SysRecon/build/install")
 set(CPACK_MODULE_PATH "")
 set(CPACK_NSIS_DISPLAY_NAME "SysRecon 1.0.0")
 set(CPACK_NSIS_INSTALLER_ICON_CODE "")
