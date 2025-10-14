@@ -1,21 +1,47 @@
 # SysRecon - Windows Audit Tool 2025
 
+> **⚠️ IMPORTANT NOTICE: PROJECT UNDER DEVELOPMENT ⚠️**
+> 
+> **This project is currently NOT FINISHED and CANNOT BE USED for production security assessments yet.**
+> 
+> 🚧 **Current Status:**
+> - ✅ Core framework and architecture implemented
+> - ✅ Cross-compilation build system working
+> - ❌ **Module implementations are placeholder stubs only**
+> - ❌ **No actual security scanning functionality**
+> - ❌ **No report generation after scans**
+> - ❌ **No real data collection or analysis**
+> 
+> **The tool currently runs successfully but only logs basic messages without performing actual auditing.**
+> **Do NOT use this for security assessments - it will not provide meaningful results.**
+> 
+> For development progress and implementation status, see [PROJECT_STATUS.md](PROJECT_STATUS.md).
+
+---
+
 **Professional Windows Security Assessment & Forensic Analysis Tool**
 
-![Version](https://img.shields.io/badge/version-1.0.0-blue)
+![Version](https://img.shields.io/badge/version-1.0.0--dev-red)
 ![Platform](https://img.shields.io/badge/platform-Windows-blue)
 ![Language](https://img.shields.io/badge/language-C++-orange)
+![Status](https://img.shields.io/badge/status-Under%20Development-red)
 ![License](https://img.shields.io/badge/license-Commercial-red)
 
 ## 🔍 Overview
 
-SysRecon is a comprehensive Windows auditing and security assessment tool designed for IT administrators, SOC teams, and penetration testers. It automates the collection, analysis, and reporting of sensitive system data to identify potential security risks, misconfigurations, and attack vectors in Windows environments.
+SysRecon is **intended to be** a comprehensive Windows auditing and security assessment tool designed for IT administrators, SOC teams, and penetration testers. Once completed, it will automate the collection, analysis, and reporting of sensitive system data to identify potential security risks, misconfigurations, and attack vectors in Windows environments.
 
-## ✨ Features
+**⚠️ Current Implementation Status: Framework Only**
+- The tool compiles and runs successfully
+- All modules are placeholder implementations
+- No actual security data is collected or analyzed
+- No reports are generated after scanning
 
-### 🔐 Security Assessment Modules
+## ✨ Planned Features (Not Yet Implemented)
+
+### 🔐 Security Assessment Modules (Planned)
 - **User Account Enumeration**: Comprehensive analysis of user accounts, groups, and permissions
-- **Service Analysis**: Service enumeration with startup analysis and security checks
+- **Service Analysis**: Service enumeration with startup analysis and security checks  
 - **Process Monitoring**: Real-time process analysis with injection detection
 - **Network Assessment**: Port scanning, connection analysis, and network configuration review
 - **Registry Analysis**: Deep registry inspection for persistence mechanisms and misconfigurations
@@ -115,33 +141,46 @@ make package
 
 ## 💻 Usage
 
-**📖 For comprehensive usage examples see [USAGE_EXAMPLES.md](USAGE_EXAMPLES.md)**
+**⚠️ IMPORTANT: The usage examples below describe intended functionality that is NOT YET IMPLEMENTED.**
 
-### Basic Usage
+**Current Status:** The tool compiles and runs but only outputs basic log messages. No actual scanning, data collection, or report generation occurs.
+
+**📖 For intended usage examples see [USAGE_EXAMPLES.md](USAGE_EXAMPLES.md)** *(describes planned functionality)*
+
+### Current Behavior (Development Version)
 ```cmd
-# Full system scan with default settings
+# Currently, running the tool only produces log output:
+sysrecon.exe
+# Output: Basic startup messages, no reports generated
+
+# Command line options are planned but not implemented yet
+```
+
+### Planned Usage (Not Yet Working)
+```cmd
+# Full system scan with default settings (PLANNED)
 sysrecon.exe
 
-# Quick scan with HTML report
+# Quick scan with HTML report (PLANNED)
 sysrecon.exe --quick --format html
 
-# Specific modules only
+# Specific modules only (PLANNED)
 sysrecon.exe --accounts --services --registry
 ```
 
-### Command Line Options
+### Planned Command Line Options (Not Implemented)
 
-| Option | Description |
-|--------|-------------|
-| `-h, --help` | Show help message |
-| `-v, --version` | Show version information |
-| `-c, --config FILE` | Load configuration from file |
-| `-o, --output DIR` | Set output directory |
-| `-f, --format FORMAT` | Report format (json,csv,html,pdf,all) |
-| `-q, --quick` | Run quick scan |
-| `-s, --stealth` | Enable stealth mode |
-| `--verbose` | Enable verbose output |
-| `--no-admin` | Skip admin privilege check |
+| Option | Status | Description |
+|--------|--------|-------------|
+| `-h, --help` | ❌ Planned | Show help message |
+| `-v, --version` | ❌ Planned | Show version information |
+| `-c, --config FILE` | ❌ Planned | Load configuration from file |
+| `-o, --output DIR` | ❌ Planned | Set output directory |
+| `-f, --format FORMAT` | ❌ Planned | Report format (json,csv,html,pdf,all) |
+| `-q, --quick` | ❌ Planned | Run quick scan |
+| `-s, --stealth` | ❌ Planned | Enable stealth mode |
+| `--verbose` | ❌ Planned | Enable verbose output |
+| `--no-admin` | ❌ Planned | Skip admin privilege check |
 
 ### Module Options
 

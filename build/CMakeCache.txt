@@ -78,7 +78,7 @@ CMAKE_FIND_PACKAGE_REDIRECTS_DIR:STATIC=/home/xpert/Desktop/Projects/SysRecon/bu
 CMAKE_GNUtoMS:BOOL=OFF
 
 //Install path prefix, prepended onto install directories.
-CMAKE_INSTALL_PREFIX:PATH=/usr/local
+CMAKE_INSTALL_PREFIX:PATH=/home/xpert/Desktop/Projects/SysRecon/build/install
 
 //Path to a program.
 CMAKE_LINKER:FILEPATH=/usr/bin/x86_64-w64-mingw32-ld
@@ -213,8 +213,8 @@ CMAKE_STRIP:FILEPATH=/usr/bin/x86_64-w64-mingw32-strip
 //Path to a program.
 CMAKE_TAPI:FILEPATH=CMAKE_TAPI-NOTFOUND
 
-//The CMake toolchain file
-CMAKE_TOOLCHAIN_FILE:FILEPATH=/home/xpert/Desktop/Projects/SysRecon/cmake/mingw-w64-x86_64.cmake
+//No help, variable specified on the command line.
+CMAKE_TOOLCHAIN_FILE:UNINITIALIZED=/home/xpert/Desktop/Projects/SysRecon/cmake/mingw-w64-x86_64.cmake
 
 //If this value is on, makefiles will be generated without the
 // .SILENT directive, and all commands will be echoed to the console
