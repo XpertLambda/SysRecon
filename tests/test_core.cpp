@@ -7,15 +7,12 @@ using namespace SysRecon::Core;
 class UtilsTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        // Setup test environment
     }
 
     void TearDown() override {
-        // Cleanup test environment
     }
 };
 
-// Test string utilities
 TEST_F(UtilsTest, StringConversion) {
     std::string utf8_str = "Hello World";
     SysRecon::String wide_str = Utils::Utf8ToWide(utf8_str);
@@ -60,7 +57,6 @@ TEST_F(UtilsTest, StringPatterns) {
     EXPECT_FALSE(Utils::EndsWith(text, L"Hello"));
 }
 
-// Test timer functionality
 TEST_F(UtilsTest, Timer) {
     Utils::Timer timer;
     
@@ -69,11 +65,10 @@ TEST_F(UtilsTest, Timer) {
     timer.Stop();
     
     double elapsed = timer.GetElapsedMilliseconds();
-    EXPECT_GE(elapsed, 90.0);  // Allow some tolerance
+    EXPECT_GE(elapsed, 90.0);
     EXPECT_LE(elapsed, 200.0);
 }
 
-// Test logger functionality
 class LoggerTest : public ::testing::Test {
 protected:
     void SetUp() override {
@@ -87,12 +82,10 @@ TEST_F(LoggerTest, LogLevels) {
     
     logger.SetLogLevel(LogLevel::Warning);
     
-    // These should be logged
     logger.Warning(L"Warning message");
     logger.Error(L"Error message");
     logger.Critical(L"Critical message");
     
-    // These should be filtered out
     logger.Debug(L"Debug message");
     logger.Info(L"Info message");
     
@@ -112,7 +105,6 @@ TEST_F(LoggerTest, LogWithContext) {
     EXPECT_EQ(logger.GetLogCount(LogLevel::Info), 1);
 }
 
-// Main test runner
 int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

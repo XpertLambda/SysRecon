@@ -77,6 +77,8 @@ sudo pacman -S base-devel git
 
 ### Building from Source
 
+**📖 For detailed compilation instructions see [COMPILATION_GUIDE.md](COMPILATION_GUIDE.md)**
+
 1. **Clone the repository**
 ```bash
 git clone https://github.com/your-org/sysrecon.git
@@ -112,6 +114,8 @@ make package
 3. Run as Administrator for full functionality
 
 ## 💻 Usage
+
+**📖 For comprehensive usage examples see [USAGE_EXAMPLES.md](USAGE_EXAMPLES.md)**
 
 ### Basic Usage
 ```cmd
@@ -266,6 +270,8 @@ make test
 
 ## 📚 Documentation
 
+- **[🔧 Compilation Guide](COMPILATION_GUIDE.md)** - Detailed build instructions for all platforms
+- **[🚀 Usage Examples](USAGE_EXAMPLES.md)** - Comprehensive usage scenarios and examples
 - [User Manual](docs/user-manual.md)
 - [Administrator Guide](docs/admin-guide.md)
 - [API Documentation](docs/api.md)

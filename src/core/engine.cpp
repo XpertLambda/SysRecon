@@ -52,7 +52,7 @@ void ScanEngine::DisableModule(ModuleType module) {
 
 bool ScanEngine::IsModuleEnabled(ModuleType module) const {
     auto it = enabled_modules_.find(module);
-    return (it != enabled_modules_.end()) ? it->second : true; // Default to enabled
+    return (it != enabled_modules_.end()) ? it->second : true;
 }
 
 bool ScanEngine::Initialize() {
@@ -62,13 +62,11 @@ bool ScanEngine::Initialize() {
         SYSRECON_LOG_WARNING(L"Insufficient privileges detected");
     }
     
-    // Set default output directory if not specified
     if (output_directory_.empty()) {
         output_directory_ = L"./reports";
         SetOutputDirectory(output_directory_);
     }
     
-    // Initialize all enabled modules
     if (!InitializeModules()) {
         SYSRECON_LOG_ERROR(L"Failed to initialize modules");
         return false;
@@ -91,10 +89,9 @@ bool ScanEngine::RunFullScan() {
     SYSRECON_LOG_INFO(L"Starting full system scan");
     
     try {
-        float step_progress = 100.0f / 6.0f; // 6 modules
+        float step_progress = 100.0f / 6.0f;
         float current_progress = 0.0f;
         
-        // Run each enabled module
         if (IsModuleEnabled(ModuleType::Accounts)) {
             UpdateProgress(current_progress, L"User Accounts");
             if (user_enum_ && !RunModuleScan(ModuleType::Accounts)) {
@@ -159,7 +156,6 @@ bool ScanEngine::RunFullScan() {
 bool ScanEngine::RunQuickScan() {
     SYSRECON_LOG_INFO(L"Starting quick scan (essential checks only)");
     
-    // Quick scan focuses on high-impact, fast checks
     bool success = true;
     
     if (IsModuleEnabled(ModuleType::Accounts) && user_enum_) {
@@ -260,7 +256,6 @@ bool ScanEngine::ExportResults(const String& format, const String& filename) {
     
     SYSRECON_LOG_INFO(L"Exporting results to: " + filename);
     
-    // Collect results from all modules
     std::lock_guard<std::mutex> lock(results_mutex_);
     scan_results_.clear();
     
@@ -274,10 +269,8 @@ bool ScanEngine::ExportResults(const String& format, const String& filename) {
         scan_results_.insert(scan_results_.end(), module_results.begin(), module_results.end());
     }
     
-    // Set results in report generator
     report_generator_->SetScanResults(scan_results_);
     
-    // Generate report based on format
     if (format == L"json") {
         return report_generator_->GenerateJSON(filename);
     } else if (format == L"csv") {
@@ -296,14 +289,13 @@ bool ScanEngine::CheckPrivileges() {
 #ifdef _WIN32
     return Core::Utils::IsRunningAsAdmin();
 #else
-    return true; // Cross-compilation stub
+    return true;
 #endif
 }
 
 bool ScanEngine::InitializeModules() {
     SYSRECON_LOG_DEBUG(L"Initializing scan modules");
     
-    // Initialize modules based on enabled status
     if (IsModuleEnabled(ModuleType::Accounts)) {
         user_enum_ = std::make_unique<Modules::UserEnumerator>();
         if (!user_enum_->Initialize()) {
@@ -311,14 +303,6 @@ bool ScanEngine::InitializeModules() {
             return false;
         }
     }
-    
-    // Initialize other modules (placeholder)
-    // service_enum_ = std::make_unique<Modules::ServiceEnumerator>();
-    // process_enum_ = std::make_unique<Modules::ProcessEnumerator>();
-    // network_enum_ = std::make_unique<Modules::NetworkEnumerator>();
-    // registry_analyzer_ = std::make_unique<Modules::RegistryAnalyzer>();
-    // memory_analyzer_ = std::make_unique<Modules::MemoryAnalyzer>();
-    // report_generator_ = std::make_unique<Modules::ReportGenerator>();
     
     return true;
 }
@@ -338,5 +322,5 @@ void ScanEngine::AddError(const String& error) {
     SYSRECON_LOG_ERROR(error);
 }
 
-} // namespace Core
-} // namespace SysRecon
+}
+}

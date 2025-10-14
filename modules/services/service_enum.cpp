@@ -27,7 +27,6 @@ bool ServiceEnumerator::EnumerateServices() {
     SYSRECON_LOG_INFO(L"Enumerating Windows services...");
     
 #ifdef _WIN32
-    // TODO: Implement service enumeration
     SYSRECON_LOG_WARNING(L"Service enumeration not yet implemented");
 #else
     SYSRECON_LOG_INFO(L"Cross-compilation stub - feature available only on Windows");
@@ -63,5 +62,5 @@ void ServiceEnumerator::Cleanup() {
     initialized_ = false;
 }
 
-} // namespace Modules
-} // namespace SysRecon
+}
+}

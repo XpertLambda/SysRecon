@@ -98,7 +98,6 @@ void Logger::Flush() {
 }
 
 void Logger::Rotate() {
-    // Simple rotation - close and reopen file
     std::lock_guard<std::mutex> lock(log_mutex_);
     if (log_file_.is_open()) {
         log_file_.close();
@@ -117,7 +116,6 @@ bool Logger::IsEnabled(LogLevel level) const {
 }
 
 size_t Logger::GetLogCount(LogLevel level) const {
-    // Note: We can't use mutex in const method, so we'll make a simple unsafe read
     auto it = log_counts_.find(level);
     return (it != log_counts_.end()) ? it->second : 0;
 }
@@ -135,7 +133,6 @@ void Logger::WriteLog(LogLevel level, const String& message) {
     }
     
     if (file_output_ && log_file_.is_open()) {
-        // Convert wide string to narrow for file output
         std::string narrowMessage;
         for (wchar_t c : formattedMessage) {
             narrowMessage += static_cast<char>(c);
@@ -172,5 +169,5 @@ String Logger::LogLevelToString(LogLevel level) {
     }
 }
 
-} // namespace Core
-} // namespace SysRecon
+}
+}

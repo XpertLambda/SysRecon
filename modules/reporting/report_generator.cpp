@@ -48,7 +48,6 @@ bool ReportGenerator::GenerateReport(ReportFormat format, const String& filename
 bool ReportGenerator::GenerateJSON(const String& filename) {
     SYSRECON_LOG_INFO(L"Generating JSON report...");
     
-    // Simple JSON generation (placeholder)
     std::wstring json = L"{\n";
     json += L"  \"scan_info\": {\n";
     json += L"    \"version\": \"1.0.0\",\n";
@@ -58,7 +57,6 @@ bool ReportGenerator::GenerateJSON(const String& filename) {
     json += L"  ]\n";
     json += L"}\n";
     
-    // Write to file
     std::ofstream file(Core::Utils::WideToUtf8(filename));
     if (!file.is_open()) {
         SYSRECON_LOG_ERROR(L"Failed to create report file");
@@ -153,5 +151,5 @@ StringVector ReportGenerator::GenerateRecommendationsList() {
     return StringVector();
 }
 
-} // namespace Modules
-} // namespace SysRecon
+}
+}
