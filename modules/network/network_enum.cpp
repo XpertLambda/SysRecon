@@ -26,7 +26,6 @@ bool NetworkEnumerator::EnumerateConnections() {
     SYSRECON_LOG_INFO(L"Enumerating network connections...");
     
 #ifdef _WIN32
-    // TODO: Implement network connection enumeration
     SYSRECON_LOG_WARNING(L"Network enumeration not yet implemented");
 #else
     SYSRECON_LOG_INFO(L"Cross-compilation stub - feature available only on Windows");
@@ -72,5 +71,5 @@ void NetworkEnumerator::Cleanup() {
     initialized_ = false;
 }
 
-} // namespace Modules
-} // namespace SysRecon
+}
+}

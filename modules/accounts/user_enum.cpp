@@ -23,7 +23,6 @@ bool UserEnumerator::Initialize() {
     }
     
 #ifdef _WIN32
-    // Enable required privileges
     if (!Core::Utils::EnableDebugPrivilege()) {
         SYSRECON_LOG_WARNING_CTX(L"UserEnumerator", L"Initialize", L"Failed to enable debug privilege");
     }
@@ -48,13 +47,10 @@ bool UserEnumerator::EnumerateUsers() {
         success = false;
     }
     
-    // Only enumerate domain users if we're in a domain
     if (!EnumerateDomainUsers()) {
-        // This is expected to fail on non-domain systems
         SYSRECON_LOG_DEBUG_CTX(L"UserEnumerator", L"EnumerateUsers", L"Domain user enumeration failed (expected on standalone systems)");
     }
     
-    // Analyze each user account
     for (const auto& user : users_) {
         AnalyzeUserAccount(user);
     }
@@ -90,11 +86,11 @@ bool UserEnumerator::EnumerateGroups() {
 }
 
 bool UserEnumerator::AnalyzePermissions() {
-    // Placeholder implementation
-    SYSRECON_LOG_INFO_CTX(L"UserEnumerator", L"AnalyzePermissions", L"Analyzing user permissions");
+    if (!analyze_permissions_) {
+        return true;
+    }
     
-    // This would analyze user rights assignments, file permissions, etc.
-    // Implementation depends on Windows security APIs
+    SYSRECON_LOG_INFO_CTX(L"UserEnumerator", L"AnalyzePermissions", L"Analyzing user permissions");
     
     return true;
 }
@@ -105,9 +101,6 @@ bool UserEnumerator::CheckPasswordPolicies() {
     }
     
     SYSRECON_LOG_INFO_CTX(L"UserEnumerator", L"CheckPasswordPolicies", L"Checking password policies");
-    
-    // This would check password complexity requirements, age policies, etc.
-    // Implementation depends on Windows policy APIs
     
     return true;
 }
@@ -122,15 +115,13 @@ void UserEnumerator::Cleanup() {
 
 bool UserEnumerator::EnumerateLocalUsers() {
 #ifdef _WIN32
-    // This is a placeholder - actual implementation would use NetUserEnum
     SYSRECON_LOG_DEBUG_CTX(L"UserEnumerator", L"EnumerateLocalUsers", L"Enumerating local users");
     
-    // Sample user data for demonstration
     UserAccount admin_user;
     admin_user.username = L"Administrator";
     admin_user.full_name = L"Built-in account for administering the computer/domain";
     admin_user.description = L"Built-in account for administering the computer/domain";
-    admin_user.is_enabled = false;  // Usually disabled by default
+    admin_user.is_enabled = false;
     admin_user.is_admin = true;
     admin_user.password_never_expires = true;
     
@@ -143,7 +134,6 @@ bool UserEnumerator::EnumerateLocalUsers() {
 }
 
 bool UserEnumerator::EnumerateDomainUsers() {
-    // Placeholder for domain user enumeration
     return false;
 }
 
@@ -151,7 +141,6 @@ bool UserEnumerator::EnumerateLocalGroups() {
 #ifdef _WIN32
     SYSRECON_LOG_DEBUG_CTX(L"UserEnumerator", L"EnumerateLocalGroups", L"Enumerating local groups");
     
-    // Sample group data
     GroupInfo admin_group;
     admin_group.group_name = L"Administrators";
     admin_group.description = L"Administrators have complete and unrestricted access to the computer/domain";
@@ -166,7 +155,6 @@ bool UserEnumerator::EnumerateLocalGroups() {
 }
 
 bool UserEnumerator::EnumerateDomainGroups() {
-    // Placeholder for domain group enumeration
     return false;
 }
 
@@ -180,7 +168,6 @@ void UserEnumerator::AnalyzeUserAccount(const UserAccount& user) {
     result.risk_level = risk_level;
     result.timestamp = std::chrono::system_clock::now();
     
-    // Add details
     result.details[L"Full Name"] = user.full_name;
     result.details[L"Description"] = user.description;
     result.details[L"Enabled"] = user.is_enabled ? L"Yes" : L"No";
@@ -193,7 +180,6 @@ void UserEnumerator::AnalyzeUserAccount(const UserAccount& user) {
 SecurityLevel UserEnumerator::AssessUserRisk(const UserAccount& user) {
     SecurityLevel risk = SecurityLevel::Low;
     
-    // Check for high-risk conditions
     if (user.is_admin && user.is_enabled) {
         risk = SecurityLevel::High;
     }
@@ -211,13 +197,11 @@ SecurityLevel UserEnumerator::AssessUserRisk(const UserAccount& user) {
 
 StringVector UserEnumerator::FindWeakPasswords() {
     StringVector weak_users;
-    // Placeholder - would implement password strength analysis
     return weak_users;
 }
 
 StringVector UserEnumerator::FindUnusedAccounts() {
     StringVector unused_users;
-    // Placeholder - would check last logon times
     return unused_users;
 }
 
@@ -233,5 +217,5 @@ StringVector UserEnumerator::FindPrivilegedAccounts() {
     return privileged_users;
 }
 
-} // namespace Modules
-} // namespace SysRecon
+}
+}

@@ -26,7 +26,6 @@ bool ProcessEnumerator::EnumerateProcesses() {
     SYSRECON_LOG_INFO(L"Enumerating running processes...");
     
 #ifdef _WIN32
-    // TODO: Implement process enumeration
     SYSRECON_LOG_WARNING(L"Process enumeration not yet implemented");
 #else
     SYSRECON_LOG_INFO(L"Cross-compilation stub - feature available only on Windows");
@@ -63,5 +62,5 @@ void ProcessEnumerator::Cleanup() {
     initialized_ = false;
 }
 
-} // namespace Modules
-} // namespace SysRecon
+}
+}

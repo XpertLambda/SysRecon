@@ -5,7 +5,6 @@ namespace Core {
 namespace Utils {
 
 #ifdef _WIN32
-// String conversion utilities for Windows
 String Utf8ToWide(const std::string& utf8_str) {
     if (utf8_str.empty()) return L"";
     
@@ -30,7 +29,6 @@ std::string WideToUtf8(const String& wide_str) {
     return result;
 }
 #else
-// Cross-compilation stubs
 String Utf8ToWide(const std::string& utf8_str) {
     return String(utf8_str.begin(), utf8_str.end());
 }
@@ -40,7 +38,6 @@ std::string WideToUtf8(const String& wide_str) {
 }
 #endif
 
-// String utilities
 String ToLower(const String& str) {
     String result = str;
     std::transform(result.begin(), result.end(), result.begin(), ::towlower);
@@ -111,7 +108,6 @@ String ReplaceAll(const String& str, const String& from, const String& to) {
     return result;
 }
 
-// File system utilities
 bool FileExists(const String& path) {
     try {
         std::filesystem::path fs_path(path);
@@ -175,7 +171,6 @@ size_t GetFileSize(const String& path) {
     }
 }
 
-// System utilities (Windows-specific)
 #ifdef _WIN32
 bool IsRunningAsAdmin() {
     BOOL is_admin = FALSE;
@@ -248,14 +243,13 @@ String GetCurrentUserName() {
     DWORD size = sizeof(buffer) / sizeof(buffer[0]);
     
     if (::GetUserNameW(buffer, &size)) {
-        return String(buffer, size - 1); // Exclude null terminator
+        return String(buffer, size - 1);
     }
     
     return L"Unknown";
 }
 
 #else
-// Cross-compilation stubs
 bool IsRunningAsAdmin() { return false; }
 bool EnableDebugPrivilege() { return false; }
 String GetLastErrorString() { return L"Not implemented"; }
@@ -264,7 +258,6 @@ String GetComputerName() { return L"Cross-compiled"; }
 String GetCurrentUserName() { return L"Cross-compiled"; }
 #endif
 
-// Time utilities
 String GetCurrentTimestamp() {
     auto now = std::chrono::system_clock::now();
     auto time_t = std::chrono::system_clock::to_time_t(now);
@@ -284,7 +277,6 @@ String FormatTimestamp(const std::chrono::system_clock::time_point& time, const 
     return ss.str();
 }
 
-// Timer implementation
 Timer::Timer() : is_running_(false) {
     Reset();
 }
@@ -331,7 +323,6 @@ String Timer::GetElapsedString() const {
     }
 }
 
-// Memory utilities
 String FormatBytes(size_t bytes) {
     const wchar_t* units[] = {L"B", L"KB", L"MB", L"GB", L"TB"};
     int unit = 0;
@@ -348,14 +339,12 @@ String FormatBytes(size_t bytes) {
     return ss.str();
 }
 
-// System information
 String GetWindowsVersion() {
 #ifdef _WIN32
     OSVERSIONINFOEXW osvi;
     ZeroMemory(&osvi, sizeof(OSVERSIONINFOEXW));
     osvi.dwOSVersionInfoSize = sizeof(OSVERSIONINFOEXW);
     
-    // Use RtlGetVersion for reliable version detection
     HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
     if (ntdll) {
         typedef LONG (WINAPI* RtlGetVersionPtr)(PRTL_OSVERSIONINFOW);
@@ -375,7 +364,6 @@ String GetWindowsVersion() {
     std::wstringstream ss;
     ss << L"Windows ";
     
-    // Determine Windows version
     if (osvi.dwMajorVersion == 10) {
         if (osvi.dwBuildNumber >= 22000) {
             ss << L"11";
@@ -403,6 +391,6 @@ String GetWindowsVersion() {
 #endif
 }
 
-} // namespace Utils
-} // namespace Core
-} // namespace SysRecon
+}
+}
+}

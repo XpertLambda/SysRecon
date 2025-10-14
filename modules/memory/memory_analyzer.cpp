@@ -29,7 +29,6 @@ bool MemoryAnalyzer::AnalyzeProcessMemory(DWORD process_id) {
     SYSRECON_LOG_INFO(L"Analyzing process memory: PID " + std::to_wstring(process_id));
     
 #ifdef _WIN32
-    // TODO: Implement memory analysis
     SYSRECON_LOG_WARNING(L"Memory analysis not yet implemented");
 #else
     SYSRECON_LOG_INFO(L"Cross-compilation stub - feature available only on Windows");
@@ -67,5 +66,5 @@ void MemoryAnalyzer::Cleanup() {
     initialized_ = false;
 }
 
-} // namespace Modules
-} // namespace SysRecon
+}
+}
