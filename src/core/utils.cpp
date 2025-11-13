@@ -391,6 +391,349 @@ String GetWindowsVersion() {
 #endif
 }
 
+#ifdef _WIN32
+bool EnableBackupPrivilege() {
+    HANDLE token;
+    TOKEN_PRIVILEGES tp;
+    LUID luid;
+    
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &token)) {
+        return false;
+    }
+    
+    if (!LookupPrivilegeValue(nullptr, SE_BACKUP_NAME, &luid)) {
+        CloseHandle(token);
+        return false;
+    }
+    
+    tp.PrivilegeCount = 1;
+    tp.Privileges[0].Luid = luid;
+    tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+    
+    bool result = AdjustTokenPrivileges(token, FALSE, &tp, sizeof(TOKEN_PRIVILEGES), nullptr, nullptr) != FALSE;
+    CloseHandle(token);
+    
+    return result;
+}
+
+String GetSystemDirectory() {
+    wchar_t buffer[MAX_PATH];
+    UINT len = ::GetSystemDirectoryW(buffer, MAX_PATH);
+    return (len > 0) ? String(buffer, len) : L"";
+}
+
+String GetWindowsDirectory() {
+    wchar_t buffer[MAX_PATH];
+    UINT len = ::GetWindowsDirectoryW(buffer, MAX_PATH);
+    return (len > 0) ? String(buffer, len) : L"";
+}
+
+String GetTempDirectory() {
+    wchar_t buffer[MAX_PATH];
+    DWORD len = ::GetTempPathW(MAX_PATH, buffer);
+    return (len > 0) ? String(buffer, len - 1) : L"";
+}
+
+DWORD GetProcessIdByName(const String& process_name) {
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) {
+        return 0;
+    }
+    
+    PROCESSENTRY32W entry;
+    entry.dwSize = sizeof(PROCESSENTRY32W);
+    
+    if (Process32FirstW(snapshot, &entry)) {
+        do {
+            if (ToLower(String(entry.szExeFile)) == ToLower(process_name)) {
+                CloseHandle(snapshot);
+                return entry.th32ProcessID;
+            }
+        } while (Process32NextW(snapshot, &entry));
+    }
+    
+    CloseHandle(snapshot);
+    return 0;
+}
+
+String GetProcessName(DWORD process_id) {
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) {
+        return L"";
+    }
+    
+    PROCESSENTRY32W entry;
+    entry.dwSize = sizeof(PROCESSENTRY32W);
+    
+    if (Process32FirstW(snapshot, &entry)) {
+        do {
+            if (entry.th32ProcessID == process_id) {
+                CloseHandle(snapshot);
+                return String(entry.szExeFile);
+            }
+        } while (Process32NextW(snapshot, &entry));
+    }
+    
+    CloseHandle(snapshot);
+    return L"";
+}
+
+bool IsWow64Process() {
+    BOOL isWow64 = FALSE;
+    typedef BOOL (WINAPI *LPFN_ISWOW64PROCESS) (HANDLE, PBOOL);
+    LPFN_ISWOW64PROCESS fnIsWow64Process = (LPFN_ISWOW64PROCESS)GetProcAddress(
+        GetModuleHandleW(L"kernel32"), "IsWow64Process");
+    
+    if (fnIsWow64Process != nullptr) {
+        if (!fnIsWow64Process(GetCurrentProcess(), &isWow64)) {
+            return false;
+        }
+    }
+    return isWow64 == TRUE;
+}
+
+bool RegistryKeyExists(HKEY root, const String& subkey) {
+    HKEY key;
+    LONG result = RegOpenKeyExW(root, subkey.c_str(), 0, KEY_READ, &key);
+    if (result == ERROR_SUCCESS) {
+        RegCloseKey(key);
+        return true;
+    }
+    return false;
+}
+
+String ReadRegistryString(HKEY root, const String& subkey, const String& value_name) {
+    HKEY key;
+    if (RegOpenKeyExW(root, subkey.c_str(), 0, KEY_READ, &key) != ERROR_SUCCESS) {
+        return L"";
+    }
+    
+    wchar_t buffer[1024];
+    DWORD buffer_size = sizeof(buffer);
+    DWORD type;
+    
+    LONG result = RegQueryValueExW(key, value_name.c_str(), nullptr, &type, 
+                                   (LPBYTE)buffer, &buffer_size);
+    RegCloseKey(key);
+    
+    if (result == ERROR_SUCCESS && (type == REG_SZ || type == REG_EXPAND_SZ)) {
+        return String(buffer);
+    }
+    
+    return L"";
+}
+
+DWORD ReadRegistryDword(HKEY root, const String& subkey, const String& value_name) {
+    HKEY key;
+    if (RegOpenKeyExW(root, subkey.c_str(), 0, KEY_READ, &key) != ERROR_SUCCESS) {
+        return 0;
+    }
+    
+    DWORD value = 0;
+    DWORD size = sizeof(DWORD);
+    DWORD type;
+    
+    RegQueryValueExW(key, value_name.c_str(), nullptr, &type, (LPBYTE)&value, &size);
+    RegCloseKey(key);
+    
+    return value;
+}
+
+ByteVector ReadRegistryBinary(HKEY root, const String& subkey, const String& value_name) {
+    HKEY key;
+    if (RegOpenKeyExW(root, subkey.c_str(), 0, KEY_READ, &key) != ERROR_SUCCESS) {
+        return ByteVector();
+    }
+    
+    DWORD size = 0;
+    DWORD type;
+    RegQueryValueExW(key, value_name.c_str(), nullptr, &type, nullptr, &size);
+    
+    if (size == 0) {
+        RegCloseKey(key);
+        return ByteVector();
+    }
+    
+    ByteVector data(size);
+    RegQueryValueExW(key, value_name.c_str(), nullptr, &type, data.data(), &size);
+    RegCloseKey(key);
+    
+    return data;
+}
+
+StringVector EnumerateRegistrySubkeys(HKEY root, const String& subkey) {
+    StringVector result;
+    HKEY key;
+    
+    if (RegOpenKeyExW(root, subkey.c_str(), 0, KEY_READ, &key) != ERROR_SUCCESS) {
+        return result;
+    }
+    
+    wchar_t name[256];
+    DWORD index = 0;
+    DWORD name_len;
+    
+    while (true) {
+        name_len = sizeof(name) / sizeof(name[0]);
+        LONG ret = RegEnumKeyExW(key, index, name, &name_len, nullptr, nullptr, nullptr, nullptr);
+        
+        if (ret == ERROR_SUCCESS) {
+            result.push_back(String(name, name_len));
+            index++;
+        } else {
+            break;
+        }
+    }
+    
+    RegCloseKey(key);
+    return result;
+}
+
+StringVector EnumerateRegistryValues(HKEY root, const String& subkey) {
+    StringVector result;
+    HKEY key;
+    
+    if (RegOpenKeyExW(root, subkey.c_str(), 0, KEY_READ, &key) != ERROR_SUCCESS) {
+        return result;
+    }
+    
+    wchar_t name[16384];
+    DWORD index = 0;
+    DWORD name_len;
+    
+    while (true) {
+        name_len = sizeof(name) / sizeof(name[0]);
+        LONG ret = RegEnumValueW(key, index, name, &name_len, nullptr, nullptr, nullptr, nullptr);
+        
+        if (ret == ERROR_SUCCESS) {
+            result.push_back(String(name, name_len));
+            index++;
+        } else {
+            break;
+        }
+    }
+    
+    RegCloseKey(key);
+    return result;
+}
+
+String RegistryKeyToString(HKEY key) {
+    if (key == HKEY_LOCAL_MACHINE) return L"HKEY_LOCAL_MACHINE";
+    if (key == HKEY_CURRENT_USER) return L"HKEY_CURRENT_USER";
+    if (key == HKEY_CLASSES_ROOT) return L"HKEY_CLASSES_ROOT";
+    if (key == HKEY_USERS) return L"HKEY_USERS";
+    if (key == HKEY_CURRENT_CONFIG) return L"HKEY_CURRENT_CONFIG";
+    return L"UNKNOWN_KEY";
+}
+
+#else
+bool EnableBackupPrivilege() { return false; }
+String GetSystemDirectory() { return L""; }
+String GetWindowsDirectory() { return L""; }
+String GetTempDirectory() { return L"/tmp"; }
+DWORD GetProcessIdByName(const String&) { return 0; }
+String GetProcessName(DWORD) { return L""; }
+bool IsWow64Process() { return false; }
+bool RegistryKeyExists(HKEY, const String&) { return false; }
+String ReadRegistryString(HKEY, const String&, const String&) { return L""; }
+DWORD ReadRegistryDword(HKEY, const String&, const String&) { return 0; }
+ByteVector ReadRegistryBinary(HKEY, const String&, const String&) { return ByteVector(); }
+StringVector EnumerateRegistrySubkeys(HKEY, const String&) { return StringVector(); }
+StringVector EnumerateRegistryValues(HKEY, const String&) { return StringVector(); }
+String RegistryKeyToString(HKEY) { return L""; }
+#endif
+
+String IpAddressToString(uint32_t ip) {
+    std::wstringstream ss;
+    ss << ((ip >> 24) & 0xFF) << L"."
+       << ((ip >> 16) & 0xFF) << L"."
+       << ((ip >> 8) & 0xFF) << L"."
+       << (ip & 0xFF);
+    return ss.str();
+}
+
+uint32_t StringToIpAddress(const String& ip_str) {
+    std::wstringstream ss(ip_str);
+    uint32_t a, b, c, d;
+    wchar_t dot;
+    ss >> a >> dot >> b >> dot >> c >> dot >> d;
+    return (a << 24) | (b << 16) | (c << 8) | d;
+}
+
+bool IsValidIpAddress(const String& ip_str) {
+    std::wregex ip_regex(L"^(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})$");
+    return std::regex_match(ip_str, ip_regex);
+}
+
+bool IsPrivateIpAddress(const String& ip_str) {
+    uint32_t ip = StringToIpAddress(ip_str);
+    uint32_t octet1 = (ip >> 24) & 0xFF;
+    uint32_t octet2 = (ip >> 16) & 0xFF;
+    
+    // 10.0.0.0/8
+    if (octet1 == 10) return true;
+    
+    // 172.16.0.0/12
+    if (octet1 == 172 && (octet2 >= 16 && octet2 <= 31)) return true;
+    
+    // 192.168.0.0/16
+    if (octet1 == 192 && octet2 == 168) return true;
+    
+    return false;
+}
+
+String MacAddressToString(const uint8_t* mac) {
+    wchar_t buffer[18];
+    swprintf(buffer, 18, L"%02X:%02X:%02X:%02X:%02X:%02X",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    return String(buffer);
+}
+
+StringVector ListFiles(const String& directory, const String& pattern) {
+    StringVector result;
+    try {
+        for (const auto& entry : std::filesystem::directory_iterator(directory)) {
+            if (entry.is_regular_file()) {
+                String filename = entry.path().filename().wstring();
+                if (pattern == L"*" || filename.find(pattern) != String::npos) {
+                    result.push_back(entry.path().wstring());
+                }
+            }
+        }
+    } catch (...) {
+    }
+    return result;
+}
+
+std::chrono::system_clock::time_point GetFileModificationTime(const String& path) {
+    try {
+        auto ftime = std::filesystem::last_write_time(path);
+        auto sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+            ftime - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now()
+        );
+        return sctp;
+    } catch (...) {
+        return std::chrono::system_clock::now();
+    }
+}
+
+bool CopyFile(const String& source, const String& destination) {
+    try {
+        std::filesystem::copy_file(source, destination, std::filesystem::copy_options::overwrite_existing);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool DeleteFile(const String& path) {
+    try {
+        return std::filesystem::remove(path);
+    } catch (...) {
+        return false;
+    }
+}
+
 }
 }
 }

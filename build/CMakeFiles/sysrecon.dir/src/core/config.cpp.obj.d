@@ -578,4 +578,47 @@ CMakeFiles/sysrecon.dir/src/core/config.cpp.obj: \
  /usr/x86_64-w64-mingw32/include/c++/15.2.0/bits/fs_ops.h \
  /usr/x86_64-w64-mingw32/include/c++/15.2.0/variant \
  /home/xpert/Desktop/Projects/SysRecon/include/../include/core/../core/logger.h \
- /home/xpert/Desktop/Projects/SysRecon/include/../include/core/../core/utils.h
+ /home/xpert/Desktop/Projects/SysRecon/include/../include/core/../core/utils.h \
+ /home/xpert/Desktop/Projects/SysRecon/external/json/json.hpp \
+ /usr/x86_64-w64-mingw32/include/c++/15.2.0/functional \
+ /usr/x86_64-w64-mingw32/include/c++/15.2.0/iterator \
+ /usr/x86_64-w64-mingw32/include/c++/15.2.0/bits/stream_iterator.h \
+ /usr/x86_64-w64-mingw32/include/c++/15.2.0/utility \
+ /usr/x86_64-w64-mingw32/include/c++/15.2.0/bits/stl_relops.h \
+ /usr/x86_64-w64-mingw32/include/c++/15.2.0/forward_list \
+ /usr/x86_64-w64-mingw32/include/c++/15.2.0/bits/forward_list.h \
+ /usr/x86_64-w64-mingw32/include/c++/15.2.0/bits/forward_list.tcc \
+ /usr/x86_64-w64-mingw32/include/c++/15.2.0/valarray \
+ /usr/x86_64-w64-mingw32/include/c++/15.2.0/cmath \
+ /usr/x86_64-w64-mingw32/include/math.h \
+ /usr/x86_64-w64-mingw32/include/c++/15.2.0/bits/specfun.h \
+ /usr/x86_64-w64-mingw32/include/c++/15.2.0/tr1/gamma.tcc \
+ /usr/x86_64-w64-mingw32/include/c++/15.2.0/tr1/special_function_util.h \
+ /usr/x86_64-w64-mingw32/include/c++/15.2.0/tr1/bessel_function.tcc \
+ /usr/x86_64-w64-mingw32/include/c++/15.2.0/tr1/beta_function.tcc \
+ /usr/x86_64-w64-mingw32/include/c++/15.2.0/tr1/ell_integral.tcc \
+ /usr/x86_64-w64-mingw32/include/c++/15.2.0/tr1/exp_integral.tcc \
+ /usr/x86_64-w64-mingw32/include/c++/15.2.0/tr1/hypergeometric.tcc \
+ /usr/x86_64-w64-mingw32/include/c++/15.2.0/tr1/legendre_function.tcc \
+ /usr/x86_64-w64-mingw32/include/c++/15.2.0/tr1/modified_bessel_func.tcc \
+ /usr/x86_64-w64-mingw32/include/c++/15.2.0/tr1/poly_hermite.tcc \
+ /usr/x86_64-w64-mingw32/include/c++/15.2.0/tr1/poly_laguerre.tcc \
+ /usr/x86_64-w64-mingw32/include/c++/15.2.0/tr1/riemann_zeta.tcc \
+ /usr/x86_64-w64-mingw32/include/c++/15.2.0/bits/valarray_array.h \
+ /usr/x86_64-w64-mingw32/include/c++/15.2.0/bits/valarray_array.tcc \
+ /usr/x86_64-w64-mingw32/include/c++/15.2.0/bits/valarray_before.h \
+ /usr/x86_64-w64-mingw32/include/c++/15.2.0/bits/slice_array.h \
+ /usr/x86_64-w64-mingw32/include/c++/15.2.0/bits/valarray_after.h \
+ /usr/x86_64-w64-mingw32/include/c++/15.2.0/bits/gslice.h \
+ /usr/x86_64-w64-mingw32/include/c++/15.2.0/bits/gslice_array.h \
+ /usr/x86_64-w64-mingw32/include/c++/15.2.0/bits/mask_array.h \
+ /usr/x86_64-w64-mingw32/include/c++/15.2.0/bits/indirect_array.h \
+ /usr/x86_64-w64-mingw32/include/c++/15.2.0/version \
+ /usr/x86_64-w64-mingw32/include/c++/15.2.0/cassert \
+ /usr/x86_64-w64-mingw32/include/assert.h \
+ /usr/x86_64-w64-mingw32/include/c++/15.2.0/cstring \
+ /usr/x86_64-w64-mingw32/include/c++/15.2.0/ranges \
+ /usr/x86_64-w64-mingw32/include/c++/15.2.0/numeric \
+ /usr/x86_64-w64-mingw32/include/c++/15.2.0/bits/stl_numeric.h \
+ /usr/x86_64-w64-mingw32/include/c++/15.2.0/pstl/glue_numeric_defs.h \
+ /usr/x86_64-w64-mingw32/include/c++/15.2.0/any
