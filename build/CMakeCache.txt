@@ -78,7 +78,7 @@ CMAKE_FIND_PACKAGE_REDIRECTS_DIR:STATIC=/home/xpert/Desktop/Projects/SysRecon/bu
 CMAKE_GNUtoMS:BOOL=OFF
 
 //Install path prefix, prepended onto install directories.
-CMAKE_INSTALL_PREFIX:PATH=/home/xpert/Desktop/Projects/SysRecon/build/install
+CMAKE_INSTALL_PREFIX:PATH=/opt/sysrecon
 
 //Path to a program.
 CMAKE_LINKER:FILEPATH=/usr/bin/x86_64-w64-mingw32-ld
