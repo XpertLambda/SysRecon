@@ -259,17 +259,55 @@ bool ScanEngine::ExportResults(const String& format, const String& filename) {
     std::lock_guard<std::mutex> lock(results_mutex_);
     scan_results_.clear();
     
+    // Collect results from all modules
     if (user_enum_) {
         auto module_results = user_enum_->GetScanResults();
         scan_results_.insert(scan_results_.end(), module_results.begin(), module_results.end());
+        SYSRECON_LOG_DEBUG(L"Collected " + std::to_wstring(module_results.size()) + L" user results");
     }
     
     if (service_enum_) {
         auto module_results = service_enum_->GetScanResults();
         scan_results_.insert(scan_results_.end(), module_results.begin(), module_results.end());
+        SYSRECON_LOG_DEBUG(L"Collected " + std::to_wstring(module_results.size()) + L" service results");
     }
     
+    if (process_enum_) {
+        auto module_results = process_enum_->GetScanResults();
+        scan_results_.insert(scan_results_.end(), module_results.begin(), module_results.end());
+        SYSRECON_LOG_DEBUG(L"Collected " + std::to_wstring(module_results.size()) + L" process results");
+    }
+    
+    if (network_enum_) {
+        auto module_results = network_enum_->GetScanResults();
+        scan_results_.insert(scan_results_.end(), module_results.begin(), module_results.end());
+        SYSRECON_LOG_DEBUG(L"Collected " + std::to_wstring(module_results.size()) + L" network results");
+    }
+    
+    if (registry_analyzer_) {
+        auto module_results = registry_analyzer_->GetScanResults();
+        scan_results_.insert(scan_results_.end(), module_results.begin(), module_results.end());
+        SYSRECON_LOG_DEBUG(L"Collected " + std::to_wstring(module_results.size()) + L" registry results");
+    }
+    
+    if (memory_analyzer_) {
+        auto module_results = memory_analyzer_->GetScanResults();
+        scan_results_.insert(scan_results_.end(), module_results.begin(), module_results.end());
+        SYSRECON_LOG_DEBUG(L"Collected " + std::to_wstring(module_results.size()) + L" memory results");
+    }
+    
+    SYSRECON_LOG_INFO(L"Total scan results collected: " + std::to_wstring(scan_results_.size()));
+    
     report_generator_->SetScanResults(scan_results_);
+    
+    // Set system info
+    Modules::SystemInfo sys_info;
+    sys_info.computer_name = Core::Utils::GetComputerName();
+    sys_info.os_version = Core::Utils::GetWindowsVersion();
+    sys_info.architecture = Core::Utils::IsWow64Process() ? L"x86" : L"x64";
+    sys_info.scan_time = std::chrono::system_clock::now();
+    sys_info.sysrecon_version = L"1.0.0";
+    report_generator_->SetSystemInfo(sys_info);
     
     if (format == L"json") {
         return report_generator_->GenerateJSON(filename);
@@ -279,6 +317,14 @@ bool ScanEngine::ExportResults(const String& format, const String& filename) {
         return report_generator_->GenerateHTML(filename);
     } else if (format == L"pdf") {
         return report_generator_->GeneratePDF(filename);
+    } else if (format == L"all") {
+        // Generate all formats
+        String base_name = filename.substr(0, filename.find_last_of(L'.'));
+        bool success = true;
+        success &= report_generator_->GenerateJSON(base_name + L".json");
+        success &= report_generator_->GenerateCSV(base_name + L".csv");
+        success &= report_generator_->GenerateHTML(base_name + L".html");
+        return success;
     } else {
         SYSRECON_LOG_ERROR(L"Unsupported format: " + format);
         return false;
@@ -296,15 +342,73 @@ bool ScanEngine::CheckPrivileges() {
 bool ScanEngine::InitializeModules() {
     SYSRECON_LOG_DEBUG(L"Initializing scan modules");
     
+    bool all_success = true;
+    
     if (IsModuleEnabled(ModuleType::Accounts)) {
         user_enum_ = std::make_unique<Modules::UserEnumerator>();
         if (!user_enum_->Initialize()) {
             SYSRECON_LOG_ERROR(L"Failed to initialize user enumeration module");
-            return false;
+            all_success = false;
+        } else {
+            SYSRECON_LOG_DEBUG(L"User enumeration module initialized");
         }
     }
     
-    return true;
+    if (IsModuleEnabled(ModuleType::Services)) {
+        service_enum_ = std::make_unique<Modules::ServiceEnumerator>();
+        if (!service_enum_->Initialize()) {
+            SYSRECON_LOG_ERROR(L"Failed to initialize service enumeration module");
+            all_success = false;
+        } else {
+            SYSRECON_LOG_DEBUG(L"Service enumeration module initialized");
+        }
+    }
+    
+    if (IsModuleEnabled(ModuleType::Processes)) {
+        process_enum_ = std::make_unique<Modules::ProcessEnumerator>();
+        if (!process_enum_->Initialize()) {
+            SYSRECON_LOG_ERROR(L"Failed to initialize process enumeration module");
+            all_success = false;
+        } else {
+            SYSRECON_LOG_DEBUG(L"Process enumeration module initialized");
+        }
+    }
+    
+    if (IsModuleEnabled(ModuleType::Network)) {
+        network_enum_ = std::make_unique<Modules::NetworkEnumerator>();
+        if (!network_enum_->Initialize()) {
+            SYSRECON_LOG_ERROR(L"Failed to initialize network enumeration module");
+            all_success = false;
+        } else {
+            SYSRECON_LOG_DEBUG(L"Network enumeration module initialized");
+        }
+    }
+    
+    if (IsModuleEnabled(ModuleType::Registry)) {
+        registry_analyzer_ = std::make_unique<Modules::RegistryAnalyzer>();
+        if (!registry_analyzer_->Initialize()) {
+            SYSRECON_LOG_ERROR(L"Failed to initialize registry analyzer module");
+            all_success = false;
+        } else {
+            SYSRECON_LOG_DEBUG(L"Registry analyzer module initialized");
+        }
+    }
+    
+    if (IsModuleEnabled(ModuleType::Memory)) {
+        memory_analyzer_ = std::make_unique<Modules::MemoryAnalyzer>();
+        if (!memory_analyzer_->Initialize()) {
+            SYSRECON_LOG_ERROR(L"Failed to initialize memory analyzer module");
+            all_success = false;
+        } else {
+            SYSRECON_LOG_DEBUG(L"Memory analyzer module initialized");
+        }
+    }
+    
+    // Always initialize report generator
+    report_generator_ = std::make_unique<Modules::ReportGenerator>();
+    SYSRECON_LOG_DEBUG(L"Report generator initialized");
+    
+    return all_success;
 }
 
 void ScanEngine::UpdateProgress(float progress, const String& module) {
