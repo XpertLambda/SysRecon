@@ -1145,6 +1145,7 @@ CMakeFiles/sysrecon.dir/modules/memory/memory_analyzer.cpp.obj: /home/xpert/Desk
   /usr/x86_64-w64-mingw32/include/winreg.h \
   /usr/x86_64-w64-mingw32/include/winsock2.h \
   /usr/x86_64-w64-mingw32/include/winsvc.h \
+  /usr/x86_64-w64-mingw32/include/winternl.h \
   /usr/x86_64-w64-mingw32/include/winuser.h \
   /usr/x86_64-w64-mingw32/include/winver.h \
   /usr/x86_64-w64-mingw32/include/wlantypes.h \
@@ -7100,6 +7101,8 @@ CMakeFiles/sysrecon.dir/src/main.cpp.obj: /home/xpert/Desktop/Projects/SysRecon/
 /home/xpert/Desktop/Projects/SysRecon/modules/registry/registry_analyzer.cpp:
 
 /home/xpert/Desktop/Projects/SysRecon/modules/network/network_enum.cpp:
+
+/usr/x86_64-w64-mingw32/include/winternl.h:
 
 /usr/x86_64-w64-mingw32/include/c++/15.2.0/bits/gslice_array.h:
 

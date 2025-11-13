@@ -579,4 +579,5 @@ CMakeFiles/sysrecon.dir/modules/memory/memory_analyzer.cpp.obj: \
  /usr/x86_64-w64-mingw32/include/c++/15.2.0/variant \
  /home/xpert/Desktop/Projects/SysRecon/modules/memory/../../include/modules/memory/../../core/logger.h \
  /home/xpert/Desktop/Projects/SysRecon/modules/memory/../../include/modules/memory/../../core/config.h \
- /home/xpert/Desktop/Projects/SysRecon/modules/memory/../../include/modules/memory/../../core/utils.h
+ /home/xpert/Desktop/Projects/SysRecon/modules/memory/../../include/modules/memory/../../core/utils.h \
+ /usr/x86_64-w64-mingw32/include/winternl.h
