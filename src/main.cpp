@@ -14,103 +14,78 @@ int wmain(int argc, wchar_t* argv[]) {
     (void)argc;
     (void)argv;
     
-    std::wcout << L"\n";
-    std::wcout << L"╔═══════════════════════════════════════════════════════════════╗\n";
-    std::wcout << L"║         SysRecon - Windows Audit Tool 2025                    ║\n";
-    std::wcout << L"║         Professional Security Assessment Platform             ║\n";
-    std::wcout << L"╚═══════════════════════════════════════════════════════════════╝\n";
-    std::wcout << L"\n";
+    std::wcout << L"SysRecon - Windows Audit Tool 2025\n";
+    std::wcout << L"=========================================\n\n";
     
-    // Initialize logging
+    // Initialize logger
     Logger::Instance().SetConsoleOutput(true);
     Logger::Instance().SetLogLevel(LogLevel::Info);
-    Logger::Instance().Info(L"SysRecon v1.0.0 starting...");
-    Logger::Instance().Info(L"System: " + Core::Utils::GetComputerName());
-    Logger::Instance().Info(L"OS: " + Core::Utils::GetWindowsVersion());
-    Logger::Instance().Info(L"User: " + Core::Utils::GetCurrentUserName());
+    Logger::Instance().Info(L"SysRecon starting...");
     
-    // Check privileges
-    if (Core::Utils::IsRunningAsAdmin()) {
-        Logger::Instance().Info(L"Running with Administrator privileges");
-    } else {
-        Logger::Instance().Warning(L"NOT running as Administrator - some features may be limited");
-    }
-    
-    std::wcout << L"\n";
-    
-    // Initialize scan engine
+    // Create scan engine
     ScanEngine& engine = ScanEngine::Instance();
     
+    // Initialize engine
     if (!engine.Initialize()) {
         Logger::Instance().Error(L"Failed to initialize scan engine");
         return 1;
     }
     
-    Logger::Instance().Info(L"Scan engine initialized successfully");
-    std::wcout << L"\n";
+    Logger::Instance().Info(L"Starting full system scan...");
+    std::wcout << L"\n🔍 Scanning system for security issues...\n\n";
     
-    // Run full scan
-    Logger::Instance().Info(L"═══════════════════════════════════════════");
-    Logger::Instance().Info(L"  Starting comprehensive system scan...   ");
-    Logger::Instance().Info(L"═══════════════════════════════════════════");
-    std::wcout << L"\n";
-    
+    // Run the scan
     bool success = engine.RunFullScan();
     
-    std::wcout << L"\n";
-    
     if (!success) {
-        Logger::Instance().Error(L"Scan completed with errors");
+        Logger::Instance().Error(L"Scan failed");
+        return 1;
     }
     
-    // Create output directory
+    Logger::Instance().Info(L"Scan completed successfully!");
+    std::wcout << L"\n✓ Scan completed!\n\n";
+    
+    // Generate reports
+    Logger::Instance().Info(L"Generating reports...");
+    std::wcout << L"📄 Generating reports...\n";
+    
+    String timestamp = Core::Utils::GetCurrentTimestamp();
     String output_dir = L"./reports";
+    
+    // Create output directory
     if (!Core::Utils::DirectoryExists(output_dir)) {
         Core::Utils::CreateDirectory(output_dir);
     }
     
-    // Generate timestamp for filename
-    String timestamp = Core::Utils::GetCurrentTimestamp();
-    String base_filename = output_dir + L"/sysrecon_report_" + timestamp;
-    
-    // Export results in all formats
-    Logger::Instance().Info(L"═══════════════════════════════════════════");
-    Logger::Instance().Info(L"  Generating security reports...          ");
-    Logger::Instance().Info(L"═══════════════════════════════════════════");
-    std::wcout << L"\n";
-    
-    bool json_success = engine.ExportResults(L"json", base_filename + L".json");
-    bool csv_success = engine.ExportResults(L"csv", base_filename + L".csv");
-    bool html_success = engine.ExportResults(L"html", base_filename + L".html");
-    
-    std::wcout << L"\n";
-    Logger::Instance().Info(L"═══════════════════════════════════════════");
-    Logger::Instance().Info(L"  Scan Complete!                          ");
-    Logger::Instance().Info(L"═══════════════════════════════════════════");
-    
-    if (json_success) {
-        Logger::Instance().Info(L"✓ JSON report: " + base_filename + L".json");
-    }
-    if (csv_success) {
-        Logger::Instance().Info(L"✓ CSV report: " + base_filename + L".csv");
-    }
-    if (html_success) {
-        Logger::Instance().Info(L"✓ HTML report: " + base_filename + L".html");
+    // Generate JSON report
+    String json_file = output_dir + L"/scan_" + timestamp + L".json";
+    if (engine.ExportResults(L"json", json_file)) {
+        std::wcout << L"  ✓ JSON report: " << json_file << L"\n";
+    } else {
+        std::wcout << L"  ✗ Failed to generate JSON report\n";
     }
     
-    std::wcout << L"\n";
-    Logger::Instance().Info(L"Total findings: " + std::to_wstring(engine.GetResults().size()));
-    
-    if (engine.HasErrors()) {
-        Logger::Instance().Warning(L"Scan completed with " + std::to_wstring(engine.GetErrors().size()) + L" errors");
+    // Generate CSV report
+    String csv_file = output_dir + L"/scan_" + timestamp + L".csv";
+    if (engine.ExportResults(L"csv", csv_file)) {
+        std::wcout << L"  ✓ CSV report: " << csv_file << L"\n";
+    } else {
+        std::wcout << L"  ✗ Failed to generate CSV report\n";
     }
+    
+    // Generate HTML report
+    String html_file = output_dir + L"/scan_" + timestamp + L".html";
+    if (engine.ExportResults(L"html", html_file)) {
+        std::wcout << L"  ✓ HTML report: " << html_file << L"\n";
+    } else {
+        std::wcout << L"  ✗ Failed to generate HTML report\n";
+    }
+    
+    std::wcout << L"\n✅ All reports generated successfully!\n";
+    std::wcout << L"\nScan complete. Check the reports directory for detailed results.\n";
     
     // Cleanup
     engine.Cleanup();
     
-    std::wcout << L"\n";
-    std::wcout << L"Press Enter to exit...";
-    std::wcin.get();
-    
-    return success ? 0 : 1;
+    return 0;
 }
