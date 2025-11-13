@@ -1147,6 +1147,7 @@ CMakeFiles/sysrecon.dir/modules/memory/memory_analyzer.cpp.obj
  /usr/x86_64-w64-mingw32/include/winreg.h
  /usr/x86_64-w64-mingw32/include/winsock2.h
  /usr/x86_64-w64-mingw32/include/winsvc.h
+ /usr/x86_64-w64-mingw32/include/winternl.h
  /usr/x86_64-w64-mingw32/include/winuser.h
  /usr/x86_64-w64-mingw32/include/winver.h
  /usr/x86_64-w64-mingw32/include/wlantypes.h
