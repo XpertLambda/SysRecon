@@ -1,9 +1,0 @@
-/home/xpert/Desktop/Projects/SysRecon/build/CMakeFiles/sysrecon.dir
-/home/xpert/Desktop/Projects/SysRecon/build/CMakeFiles/package.dir
-/home/xpert/Desktop/Projects/SysRecon/build/CMakeFiles/package_source.dir
-/home/xpert/Desktop/Projects/SysRecon/build/CMakeFiles/edit_cache.dir
-/home/xpert/Desktop/Projects/SysRecon/build/CMakeFiles/rebuild_cache.dir
-/home/xpert/Desktop/Projects/SysRecon/build/CMakeFiles/list_install_components.dir
-/home/xpert/Desktop/Projects/SysRecon/build/CMakeFiles/install.dir
-/home/xpert/Desktop/Projects/SysRecon/build/CMakeFiles/install/local.dir
-/home/xpert/Desktop/Projects/SysRecon/build/CMakeFiles/install/strip.dir
