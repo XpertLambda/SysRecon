@@ -586,4 +586,6 @@ CMakeFiles/sysrecon.dir/src/main.cpp.obj: \
  /home/xpert/Desktop/Projects/SysRecon/src/../include/core/../modules/network/network_enum.h \
  /home/xpert/Desktop/Projects/SysRecon/src/../include/core/../modules/registry/registry_analyzer.h \
  /home/xpert/Desktop/Projects/SysRecon/src/../include/core/../modules/memory/memory_analyzer.h \
- /home/xpert/Desktop/Projects/SysRecon/src/../include/core/../modules/reporting/report_generator.h
+ /home/xpert/Desktop/Projects/SysRecon/src/../include/core/../modules/reporting/report_generator.h \
+ /usr/x86_64-w64-mingw32/include/conio.h \
+ /usr/x86_64-w64-mingw32/include/sec_api/conio_s.h

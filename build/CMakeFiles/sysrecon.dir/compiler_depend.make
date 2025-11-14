@@ -6829,6 +6829,7 @@ CMakeFiles/sysrecon.dir/src/main.cpp.obj: /home/xpert/Desktop/Projects/SysRecon/
   /usr/x86_64-w64-mingw32/include/combaseapi.h \
   /usr/x86_64-w64-mingw32/include/commctrl.h \
   /usr/x86_64-w64-mingw32/include/concurrencysal.h \
+  /usr/x86_64-w64-mingw32/include/conio.h \
   /usr/x86_64-w64-mingw32/include/consoleapi.h \
   /usr/x86_64-w64-mingw32/include/consoleapi2.h \
   /usr/x86_64-w64-mingw32/include/consoleapi3.h \
@@ -6963,6 +6964,7 @@ CMakeFiles/sysrecon.dir/src/main.cpp.obj: /home/xpert/Desktop/Projects/SysRecon/
   /usr/x86_64-w64-mingw32/include/sddl.h \
   /usr/x86_64-w64-mingw32/include/sdkddkver.h \
   /usr/x86_64-w64-mingw32/include/sdks/_mingw_ddk.h \
+  /usr/x86_64-w64-mingw32/include/sec_api/conio_s.h \
   /usr/x86_64-w64-mingw32/include/sec_api/stdio_s.h \
   /usr/x86_64-w64-mingw32/include/sec_api/stdlib_s.h \
   /usr/x86_64-w64-mingw32/include/sec_api/stralign_s.h \
@@ -7035,6 +7037,8 @@ CMakeFiles/sysrecon.dir/src/main.cpp.obj: /home/xpert/Desktop/Projects/SysRecon/
   /usr/x86_64-w64-mingw32/include/wtypes.h \
   /usr/x86_64-w64-mingw32/include/wtypesbase.h
 
+
+/usr/x86_64-w64-mingw32/include/sec_api/conio_s.h:
 
 /home/xpert/Desktop/Projects/SysRecon/src/core/utils.cpp:
 
@@ -7659,6 +7663,8 @@ CMakeFiles/sysrecon.dir/src/main.cpp.obj: /home/xpert/Desktop/Projects/SysRecon/
 /usr/lib/gcc/x86_64-w64-mingw32/15.2.0/include/stdint.h:
 
 /usr/x86_64-w64-mingw32/include/consoleapi3.h:
+
+/usr/x86_64-w64-mingw32/include/conio.h:
 
 /usr/x86_64-w64-mingw32/include/c++/15.2.0/ext/string_conversions.h:
 

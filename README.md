@@ -1,6 +1,6 @@
 # SysRecon - Windows Security Audit & Reconnaissance Tool
 
-[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://github.com/XpertLambda/SysRecon/releases)
+[![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)](https://github.com/XpertLambda/SysRecon/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010/11%20|%20Server%202016+-blue.svg)](https://github.com/XpertLambda/SysRecon)
 [![Language](https://img.shields.io/badge/language-C++20-orange.svg)](https://github.com/XpertLambda/SysRecon)
 [![License](https://img.shields.io/badge/license-Commercial-red.svg)](LICENSE)
@@ -22,6 +22,8 @@
 - [Output & Reporting](#output--reporting)
 - [Use Cases](#use-cases)
 - [Build Instructions](#build-instructions)
+- [Building the Installer](#building-the-installer)
+- [Distribution](#distribution)
 - [Architecture](#architecture)
 - [Support & Licensing](#support--licensing)
 
@@ -313,12 +315,55 @@ REM Or use PowerShell with elevation:
 Start-Process cmd.exe -Verb RunAs
 ```
 
+### Interactive Menu Mode (Recommended for Beginners)
+
+When you launch `sysrecon.exe` **without any arguments**, it will display an **interactive menu** that guides you through all available options:
+
+```cmd
+sysrecon.exe
+```
+
+**Interactive Menu Features:**
+- 🎯 **User-Friendly Interface**: Navigate through options with simple number selections
+- ✅ **Option Validation**: All menu options are tested and guaranteed to work
+- 📋 **Module Selection**: Easily choose which security modules to run
+- ⚙️ **Configuration**: Change settings without remembering command-line syntax
+- 📊 **Report Options**: Select output formats visually
+- 🔍 **Multiple Scan Modes**: Full scan, selective scan, quick scan, stealth mode
+
+**Menu Options Include:**
+1. Run Full System Scan (All Modules)
+2. Run Selective Module Scan
+3. Quick Scan Mode
+4. Stealth Mode Scan
+5. Configure Settings (output directory, formats, verbosity)
+6. View Report Options
+7. About / Version Info
+8. Help & Command-Line Usage
+
+**Example Workflow:**
+```
+1. Launch: sysrecon.exe
+2. Choose option "2" (Selective Module Scan)
+3. Select modules: 1 (Accounts), 2 (Services), 4 (Network)
+4. Choose option "8" (Start Scan)
+5. Reports generated automatically!
+```
+
 ### Basic Operation
 
 #### Full System Assessment
 
 ```cmd
 sysrecon.exe
+```
+
+Launches the interactive menu. For command-line usage, see examples below.
+
+To run a full scan via command-line:
+
+```cmd
+sysrecon.exe --accounts --services --processes --network --registry --memory
 ```
 
 Executes a comprehensive security assessment across all modules with default configuration.
@@ -674,107 +719,201 @@ REM Compare with baseline
 
 ## Build Instructions
 
-### Linux Cross-Compilation (Recommended)
+> **📘 For Complete Build Guide**: See [BUILD_GUIDE.md](BUILD_GUIDE.md) for comprehensive instructions including:
+> - Detailed Linux cross-compilation steps
+> - Windows native build instructions
+> - NSIS installer creation
+> - Distribution package creation
+> - Troubleshooting common issues
+
+### Quick Start: Building on Linux
 
 #### Prerequisites Setup
 
 **Arch Linux:**
 ```bash
-sudo pacman -S mingw-w64-gcc mingw-w64-cmake cmake make base-devel git
+sudo pacman -S mingw-w64-gcc cmake make git
 ```
 
 **Ubuntu 20.04 LTS / Debian 11:**
 ```bash
 sudo apt update && sudo apt upgrade -y
-sudo apt install -y mingw-w64 cmake build-essential git pkg-config
+sudo apt install -y mingw-w64 cmake build-essential git
 ```
 
 **Fedora 35+ / RHEL 8:**
 ```bash
-sudo dnf install -y mingw64-gcc-c++ mingw64-winpthreads-static cmake make git
+sudo dnf install -y mingw64-gcc-c++ cmake make git
 ```
 
-#### Build Process
+#### Simple Build Process
 
 ```bash
 # Clone repository
-git clone https://github.com/YourOrganization/SysRecon.git
+git clone https://github.com/XpertLambda/SysRecon.git
 cd SysRecon
 
+# Run build script (easiest method)
+./build.sh
+
+# Output: build/sysrecon.exe (~17 MB)
+```
+
+#### Manual Build (Advanced)
+
+```bash
 # Create build directory
 mkdir -p build && cd build
 
 # Configure with MinGW-w64 toolchain
 cmake -DCMAKE_TOOLCHAIN_FILE=../cmake/mingw-w64-x86_64.cmake \
       -DCMAKE_BUILD_TYPE=Release \
-      -DCMAKE_INSTALL_PREFIX=/opt/sysrecon \
-      -S .. -B .
+      ..
 
-# Build with parallel compilation (utilize all CPU cores)
+# Build with parallel compilation
 make -j$(nproc)
 
-# Optional: Run test suite
-ctest --output-on-failure
-
-# Package for distribution
-make package
-
-# Output: build/sysrecon.exe (approximately 18 MB)
+# Output: build/sysrecon.exe
 ```
 
-#### Build Optimization
-
-For size-optimized builds:
-```bash
-cmake -DCMAKE_TOOLCHAIN_FILE=../cmake/mingw-w64-x86_64.cmake \
-      -DCMAKE_BUILD_TYPE=MinSizeRel \
-      -DCMAKE_CXX_FLAGS="-Os -s" \
-      -S .. -B .
-```
-
-### Windows Native Compilation
+### Building on Windows (Native)
 
 #### Prerequisites Setup
 
 1. **Install Visual Studio 2022**
-   - Download Community Edition (free) from [visualstudio.microsoft.com](https://visualstudio.microsoft.com/)
-   - During installation, select **"Desktop development with C++"**
-   - Ensure Windows 10/11 SDK is included
+   - Download Community Edition from [visualstudio.microsoft.com](https://visualstudio.microsoft.com/)
+   - Select **"Desktop development with C++"** workload
+   - Include Windows 10/11 SDK
 
-2. **Install CMake**
-   - Download from [cmake.org/download](https://cmake.org/download/)
-   - Select "Add CMake to system PATH" during installation
-
-3. **Install Git for Windows**
-   - Download from [git-scm.com](https://git-scm.com/download/win)
-   - Use default installation options
+2. **Install CMake & Git**
+   - CMake: [cmake.org/download](https://cmake.org/download/)
+   - Git: [git-scm.com](https://git-scm.com/download/win)
 
 #### Build Process
 
 ```powershell
-# Open "Developer Command Prompt for VS 2022" or "Developer PowerShell"
+# Open "Developer Command Prompt for VS 2022"
 
 # Clone repository
-git clone https://github.com/YourOrganization/SysRecon.git
+git clone https://github.com/XpertLambda/SysRecon.git
 cd SysRecon
 
-# Create build directory
+# Run build script
+.\build.bat
+
+# Or manual build:
 mkdir build
 cd build
-
-# Configure for Visual Studio 2022 (x64)
 cmake -G "Visual Studio 17 2022" -A x64 ..
-
-# Build release version
 cmake --build . --config Release --parallel
-
-# Optional: Build debug version
-cmake --build . --config Debug --parallel
 
 # Output: build\Release\sysrecon.exe
 ```
 
-### Build Troubleshooting
+---
+
+## Building the Installer
+
+### Prerequisites
+
+**Install NSIS (Nullsoft Scriptable Install System):**
+
+```bash
+# Arch Linux (using AUR helper)
+yay -S nsis
+# or
+paru -S nsis
+
+# Ubuntu/Debian
+sudo apt install nsis
+
+# Fedora/RHEL
+sudo dnf install nsis
+
+# Verify installation
+makensis -VERSION  # Should show v3.11 or higher
+```
+
+### Create Windows Installer
+
+```bash
+# 1. Build the executable first
+./build.sh
+
+# 2. Run installer build script
+./build-installer.sh
+
+# Output: SysRecon-Setup-1.1.0.exe (~3.9 MB)
+```
+
+**What the installer includes:**
+- ✅ Main executable (sysrecon.exe)
+- ✅ Default configuration (config.json)
+- ✅ Documentation (README.txt)
+- ✅ License file
+- ✅ Start Menu shortcuts (6 shortcuts)
+- ✅ Optional desktop shortcut
+- ✅ Uninstaller
+- ✅ Registry integration
+
+---
+
+## Distribution
+
+### What to Distribute
+
+**Option 1: Windows Installer (Recommended) ⭐**
+```
+📦 SysRecon-Setup-1.1.0.exe  (3.9 MB)
+   - Complete installation package
+   - Professional setup wizard
+   - Easy uninstallation
+```
+
+**Option 2: Portable Package**
+```
+📦 SysRecon-1.1.0-Portable.zip  (~17 MB)
+   ├── sysrecon.exe          # Main executable
+   ├── config.json           # Configuration
+   ├── README.md             # Documentation
+   ├── LICENSE               # License file
+   └── reports/              # Output folder
+```
+
+**Option 3: Both (Complete Distribution)**
+```
+Upload to GitHub Release:
+   ├── SysRecon-Setup-1.1.0.exe    # Installer
+   ├── sysrecon.exe                # Portable executable
+   ├── checksums.txt               # SHA256 hashes
+   └── Source code (auto-generated by GitHub)
+```
+
+### Create Checksums
+
+```bash
+# Generate SHA256 checksums for verification
+sha256sum SysRecon-Setup-1.1.0.exe > checksums.txt
+sha256sum build/sysrecon.exe >> checksums.txt
+
+# Users can verify integrity on Windows:
+# Get-FileHash -Algorithm SHA256 SysRecon-Setup-1.1.0.exe
+```
+
+### Required Files Summary
+
+**Minimum (Portable):**
+- `sysrecon.exe` (main executable)
+- `config.json` (configuration file)
+
+**Recommended (Complete):**
+- `SysRecon-Setup-1.1.0.exe` (installer - includes everything)
+- `checksums.txt` (file verification)
+- Documentation (README, CHANGELOG)
+
+---
+
+## Build Troubleshooting
 
 #### Issue: MinGW-w64 Not Found
 

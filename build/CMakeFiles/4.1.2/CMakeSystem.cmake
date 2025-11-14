@@ -1,6 +1,6 @@
-set(CMAKE_HOST_SYSTEM "Linux-6.17.1-zen1-1-zen")
+set(CMAKE_HOST_SYSTEM "Linux-6.17.7-zen1-2-zen")
 set(CMAKE_HOST_SYSTEM_NAME "Linux")
-set(CMAKE_HOST_SYSTEM_VERSION "6.17.1-zen1-1-zen")
+set(CMAKE_HOST_SYSTEM_VERSION "6.17.7-zen1-2-zen")
 set(CMAKE_HOST_SYSTEM_PROCESSOR "x86_64")
 
 include("/home/xpert/Desktop/Projects/SysRecon/cmake/mingw-w64-x86_64.cmake")

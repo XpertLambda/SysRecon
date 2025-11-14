@@ -6,5 +6,5 @@ CXX_DEFINES = -DNOMINMAX -DUNICODE -DWIN32_LEAN_AND_MEAN -D_UNICODE
 
 CXX_INCLUDES = @CMakeFiles/sysrecon.dir/includes_CXX.rsp
 
-CXX_FLAGS =  -static-libgcc -static-libstdc++ -O3 -DNDEBUG -std=gnu++20 -Wall -Wextra -Wpedantic -O3 -DNDEBUG
+CXX_FLAGS =  -static-libgcc -static-libstdc++ -static-libgcc -static-libstdc++ -O3 -DNDEBUG -std=gnu++20 -Wall -Wextra -Wpedantic -O3 -DNDEBUG
 
