@@ -1,4 +1,5 @@
 #include "../../include/modules/registry/registry_analyzer.h"
+#include "../../include/core/whitelist.h"
 
 namespace SysRecon {
 namespace Modules {
@@ -58,20 +59,33 @@ bool RegistryAnalyzer::AnalyzeStartupKeys() {
                     entry.location = L"HKLM\\" + key_path;
                     entry.is_enabled = true;
                     entry.is_signed = false;
-                    entry.risk_level = SecurityLevel::Medium;
+                    
+                    // Check if this is a known legitimate startup entry
+                    bool is_known = Core::SystemWhitelist::Instance().IsKnownPersistenceKey(entry.name);
+                    bool is_system_path = Core::SystemWhitelist::Instance().IsSystemPath(entry.command);
+                    
+                    // Assign risk level based on analysis
+                    if (is_known || is_system_path) {
+                        entry.risk_level = SecurityLevel::Low;
+                    } else {
+                        entry.risk_level = SecurityLevel::Medium;
+                    }
                     
                     startup_entries_.push_back(entry);
                     
-                    // Create scan result
-                    ScanResult scan_result;
-                    scan_result.module_name = L"Registry";
-                    scan_result.item_name = entry.name;
-                    scan_result.description = L"Startup entry in: " + entry.location;
-                    scan_result.details[L"Command"] = entry.command;
-                    scan_result.details[L"Location"] = entry.location;
-                    scan_result.risk_level = SecurityLevel::Medium;
-                    scan_result.timestamp = std::chrono::system_clock::now();
-                    scan_results_.push_back(scan_result);
+                    // Only create scan result for non-system entries or medium+ risk
+                    if (!is_known && !is_system_path) {
+                        ScanResult scan_result;
+                        scan_result.module_name = L"Registry";
+                        scan_result.item_name = entry.name;
+                        scan_result.description = L"Startup entry in: " + entry.location;
+                        scan_result.details[L"Command"] = entry.command;
+                        scan_result.details[L"Location"] = entry.location;
+                        scan_result.details[L"Note"] = is_known ? L"Known system component" : L"Third-party startup entry";
+                        scan_result.risk_level = entry.risk_level;
+                        scan_result.timestamp = std::chrono::system_clock::now();
+                        scan_results_.push_back(scan_result);
+                    }
                     
                     index++;
                 } else {

@@ -1,4 +1,5 @@
 #include "../../include/modules/memory/memory_analyzer.h"
+#include "../../include/core/whitelist.h"
 #include <psapi.h>
 #include <tlhelp32.h>
 #include <winternl.h>
@@ -74,19 +75,40 @@ bool MemoryAnalyzer::AnalyzeProcessMemory(DWORD process_id) {
     // Analyze each region for suspicious patterns
     for (const auto& region : memory_info.regions) {
         if (region.is_executable && region.is_writable) {
-            String suspicious = L"RWX region at 0x" + std::to_wstring(region.base_address) + 
-                              L" (size: " + std::to_wstring(region.region_size) + L")";
-            memory_info.suspicious_regions.push_back(suspicious);
+            // Check if this is a system process before flagging RWX regions
+            bool is_system = Core::SystemWhitelist::Instance().IsSystemProcess(memory_info.process_name);
             
-            ScanResult result;
-            result.module_name = L"Memory";
-            result.item_name = memory_info.process_name;
-            result.description = suspicious;
-            result.risk_level = SecurityLevel::High;
-            result.details[L"address"] = std::to_wstring(region.base_address);
-            result.details[L"size"] = std::to_wstring(region.region_size);
-            result.details[L"protection"] = region.protection_string;
-            scan_results_.push_back(result);
+            // Only flag RWX regions as high risk for non-system processes
+            // or if the region is unusually large
+            SecurityLevel region_risk = SecurityLevel::Low;
+            
+            if (!is_system && region.region_size > 0x1000) {  // Larger than 4KB
+                region_risk = SecurityLevel::Medium;
+            }
+            
+            if (!is_system && region.region_size > 0x100000) {  // Larger than 1MB
+                region_risk = SecurityLevel::High;
+            }
+            
+            String suspicious = L"RWX (Read-Write-Execute) memory region at 0x" + 
+                              std::to_wstring(region.base_address) + 
+                              L" (size: " + std::to_wstring(region.region_size / 1024) + L" KB)";
+            
+            if (region_risk >= SecurityLevel::Medium) {
+                memory_info.suspicious_regions.push_back(suspicious);
+                
+                ScanResult result;
+                result.module_name = L"Memory";
+                result.item_name = memory_info.process_name;
+                result.description = suspicious;
+                result.risk_level = region_risk;
+                result.details[L"address"] = std::to_wstring(region.base_address);
+                result.details[L"size"] = std::to_wstring(region.region_size);
+                result.details[L"size_kb"] = std::to_wstring(region.region_size / 1024);
+                result.details[L"protection"] = region.protection_string;
+                result.details[L"note"] = is_system ? L"System process - may be normal" : L"Non-system process";
+                scan_results_.push_back(result);
+            }
         }
     }
     
@@ -230,45 +252,58 @@ bool MemoryAnalyzer::DetectInjection() {
     
     if (Process32FirstW(hSnapshot, &pe32)) {
         do {
-            // Check for DLL injection
+            // Skip system processes to reduce false positives
+            String proc_name = pe32.szExeFile;
+            bool is_system = Core::SystemWhitelist::Instance().IsSystemProcess(proc_name);
+            
+            // Check for DLL injection (but be more careful with system processes)
             if (DetectDllInjection(pe32.th32ProcessID)) {
+                // Additional validation for system processes
+                if (is_system) {
+                    // System processes often have private executable memory for JIT, etc.
+                    // Only flag if it's truly suspicious
+                    continue;
+                }
+                
                 InjectionIndicator indicator;
-                indicator.type = L"DLL Injection";
-                indicator.description = L"Suspicious DLL detected in process " + String(pe32.szExeFile);
+                indicator.type = L"Possible DLL Injection";
+                indicator.description = L"Suspicious unbacked executable memory in process: " + String(pe32.szExeFile);
                 indicator.address = 0;
                 indicator.size = 0;
-                indicator.evidence = L"Unbacked memory region or suspicious DLL";
-                indicator.severity = SecurityLevel::Critical;
+                indicator.evidence = L"Private executable memory region (may be normal for .NET/JIT processes)";
+                indicator.severity = SecurityLevel::Medium;  // Reduced from Critical
                 injection_indicators_.push_back(indicator);
                 
                 ScanResult result;
                 result.module_name = L"Memory Injection";
                 result.item_name = pe32.szExeFile;
-                result.description = L"DLL injection detected";
-                result.risk_level = SecurityLevel::Critical;
+                result.description = L"Possible DLL injection detected (unbacked executable memory)";
+                result.risk_level = SecurityLevel::Medium;  // Reduced from Critical
                 result.details[L"process_id"] = std::to_wstring(pe32.th32ProcessID);
-                result.details[L"injection_type"] = L"DLL Injection";
+                result.details[L"injection_type"] = L"Possible DLL Injection";
+                result.details[L"note"] = L"May be false positive for .NET/JIT compiled processes";
                 scan_results_.push_back(result);
             }
             
-            // Check for process hollowing
-            if (DetectProcessHollowing(pe32.th32ProcessID)) {
+            // Check for process hollowing (keep this check more strict)
+            if (!is_system && DetectProcessHollowing(pe32.th32ProcessID)) {
                 InjectionIndicator indicator;
-                indicator.type = L"Process Hollowing";
-                indicator.description = L"Process hollowing detected: " + String(pe32.szExeFile);
+                indicator.type = L"Possible Process Hollowing";
+                indicator.description = L"Process hollowing indicators detected: " + String(pe32.szExeFile);
                 indicator.address = 0;
                 indicator.size = 0;
-                indicator.evidence = L"Mismatched base address or entry point";
-                indicator.severity = SecurityLevel::Critical;
+                indicator.evidence = L"Suspicious memory characteristics";
+                indicator.severity = SecurityLevel::High;  // Reduced from Critical
                 injection_indicators_.push_back(indicator);
                 
                 ScanResult result;
                 result.module_name = L"Memory Injection";
                 result.item_name = pe32.szExeFile;
-                result.description = L"Process hollowing detected";
-                result.risk_level = SecurityLevel::Critical;
+                result.description = L"Possible process hollowing detected";
+                result.risk_level = SecurityLevel::High;  // Reduced from Critical
                 result.details[L"process_id"] = std::to_wstring(pe32.th32ProcessID);
-                result.details[L"injection_type"] = L"Process Hollowing";
+                result.details[L"injection_type"] = L"Possible Process Hollowing";
+                result.details[L"note"] = L"Requires manual verification";
                 scan_results_.push_back(result);
             }
             

@@ -2,8 +2,10 @@
 #include "../include/core/engine.h"
 #include <map>
 #include <algorithm>
-#include <conio.h>
 #include <iostream>
+#include <windows.h>
+#include <cstdio>
+#include <clocale>
 
 using namespace SysRecon;
 using namespace SysRecon::Core;
@@ -91,10 +93,10 @@ void PrintVersion() {
     std::wcout << L"Compiler:     MinGW-w64 (C++20)\n";
     std::wcout << L"\n";
     std::wcout << L"New in v1.1.0:\n";
-    std::wcout << L"  ✓ Interactive menu mode for easy navigation\n";
-    std::wcout << L"  ✓ Enhanced module selection interface\n";
-    std::wcout << L"  ✓ Real-time configuration changes\n";
-    std::wcout << L"  ✓ Improved user experience\n";
+    std::wcout << L"  * Interactive menu mode for easy navigation\n";
+    std::wcout << L"  * Enhanced module selection interface\n";
+    std::wcout << L"  * Real-time configuration changes\n";
+    std::wcout << L"  * Improved user experience\n";
     std::wcout << L"\n";
 }
 
@@ -105,7 +107,28 @@ void ClearScreen() {
 
 void WaitForKey() {
     std::wcout << L"\nPress any key to continue...";
-    _getch();
+    std::wcout.flush();
+    
+    // Use Windows API instead of _getch()
+    HANDLE hStdin = GetStdHandle(STD_INPUT_HANDLE);
+    DWORD mode;
+    GetConsoleMode(hStdin, &mode);
+    SetConsoleMode(hStdin, mode & ~(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT));
+    
+    INPUT_RECORD inputRecord;
+    DWORD events;
+    
+    // Wait for a key press
+    while (true) {
+        ReadConsoleInput(hStdin, &inputRecord, 1, &events);
+        if (inputRecord.EventType == KEY_EVENT && inputRecord.Event.KeyEvent.bKeyDown) {
+            break;
+        }
+    }
+    
+    // Restore console mode
+    SetConsoleMode(hStdin, mode);
+    std::wcout << L"\n";
 }
 
 int GetMenuChoice(int min, int max) {
@@ -155,15 +178,15 @@ void ShowMainMenu() {
     std::wcout << L"║                           MAIN MENU                                  ║\n";
     std::wcout << L"╚══════════════════════════════════════════════════════════════════════╝\n";
     std::wcout << L"\n";
-    std::wcout << L"  1. 🔍 Run Full System Scan (All Modules)\n";
-    std::wcout << L"  2. 📋 Run Selective Module Scan\n";
-    std::wcout << L"  3. ⚡ Quick Scan Mode\n";
-    std::wcout << L"  4. 🕵️  Stealth Mode Scan\n";
-    std::wcout << L"  5. ⚙️  Configure Settings\n";
-    std::wcout << L"  6. 📄 View Report Options\n";
-    std::wcout << L"  7. ℹ️  About / Version Info\n";
-    std::wcout << L"  8. ❓ Help & Command-Line Usage\n";
-    std::wcout << L"  0. 🚪 Exit\n";
+    std::wcout << L"  1. Run Full System Scan (All Modules)\n";
+    std::wcout << L"  2. Run Selective Module Scan\n";
+    std::wcout << L"  3. Quick Scan Mode\n";
+    std::wcout << L"  4. Stealth Mode Scan\n";
+    std::wcout << L"  5. Configure Settings\n";
+    std::wcout << L"  6. View Report Options\n";
+    std::wcout << L"  7. About / Version Info\n";
+    std::wcout << L"  8. Help & Command-Line Usage\n";
+    std::wcout << L"  0. Exit\n";
     std::wcout << L"\n";
     std::wcout << L"══════════════════════════════════════════════════════════════════════\n";
 }
@@ -176,15 +199,15 @@ void ShowModuleSelectionMenu(CommandLineOptions& options) {
     std::wcout << L"║                     SELECT MODULES TO SCAN                           ║\n";
     std::wcout << L"╚══════════════════════════════════════════════════════════════════════╝\n";
     std::wcout << L"\n";
-    std::wcout << L"  1. 👥 User Accounts & Groups\n";
-    std::wcout << L"  2. 🔧 Windows Services\n";
-    std::wcout << L"  3. ⚙️  Running Processes\n";
-    std::wcout << L"  4. 🌐 Network Connections & Ports\n";
-    std::wcout << L"  5. 📝 Registry Persistence Keys\n";
-    std::wcout << L"  6. 🧠 Process Memory Analysis (Slow)\n";
-    std::wcout << L"  7. ✅ Select All Modules\n";
-    std::wcout << L"  8. 🚀 Start Scan with Selected Modules\n";
-    std::wcout << L"  0. ⬅️  Back to Main Menu\n";
+    std::wcout << L"  1. User Accounts & Groups\n";
+    std::wcout << L"  2. Windows Services\n";
+    std::wcout << L"  3. Running Processes\n";
+    std::wcout << L"  4. Network Connections & Ports\n";
+    std::wcout << L"  5. Registry Persistence Keys\n";
+    std::wcout << L"  6. Process Memory Analysis (Slow)\n";
+    std::wcout << L"  7. Select All Modules\n";
+    std::wcout << L"  8. Start Scan with Selected Modules\n";
+    std::wcout << L"  0. Back to Main Menu\n";
     std::wcout << L"\n";
     std::wcout << L"══════════════════════════════════════════════════════════════════════\n";
     std::wcout << L"Selected: ";
@@ -225,12 +248,12 @@ void ShowConfigurationMenu(CommandLineOptions& options) {
     std::wcout << L"  Quiet Mode:     " << (options.quiet ? L"Enabled" : L"Disabled") << L"\n";
     std::wcout << L"────────────────────────────────────────────────────────────────────\n";
     std::wcout << L"\n";
-    std::wcout << L"  1. 📂 Change Output Directory\n";
-    std::wcout << L"  2. 📄 Change Report Formats\n";
-    std::wcout << L"  3. 🔊 Toggle Verbose Mode\n";
-    std::wcout << L"  4. 🔇 Toggle Quiet Mode\n";
-    std::wcout << L"  5. 📋 Load Config File\n";
-    std::wcout << L"  0. ⬅️  Back to Main Menu\n";
+    std::wcout << L"  1. Change Output Directory\n";
+    std::wcout << L"  2. Change Report Formats\n";
+    std::wcout << L"  3. Toggle Verbose Mode\n";
+    std::wcout << L"  4. Toggle Quiet Mode\n";
+    std::wcout << L"  5. Load Config File\n";
+    std::wcout << L"  0. Back to Main Menu\n";
     std::wcout << L"\n";
     std::wcout << L"══════════════════════════════════════════════════════════════════════\n";
 }
@@ -245,11 +268,11 @@ void ShowReportOptionsMenu(CommandLineOptions& options) {
     std::wcout << L"\n";
     std::wcout << L"Select report format(s) to generate:\n";
     std::wcout << L"\n";
-    std::wcout << L"  1. 📋 JSON Format (Machine-readable, detailed)\n";
-    std::wcout << L"  2. 📊 CSV Format (Spreadsheet-compatible)\n";
-    std::wcout << L"  3. 🌐 HTML Format (Human-readable, visual)\n";
-    std::wcout << L"  4. 📦 All Formats\n";
-    std::wcout << L"  0. ⬅️  Back to Main Menu\n";
+    std::wcout << L"  1. JSON Format (Machine-readable, detailed)\n";
+    std::wcout << L"  2. CSV Format (Spreadsheet-compatible)\n";
+    std::wcout << L"  3. HTML Format (Human-readable, visual)\n";
+    std::wcout << L"  4. All Formats\n";
+    std::wcout << L"  0. Back to Main Menu\n";
     std::wcout << L"\n";
     std::wcout << L"══════════════════════════════════════════════════════════════════════\n";
     std::wcout << L"Current Formats: ";
@@ -435,29 +458,74 @@ int RunScan(CommandLineOptions& options) {
         return 1;
     }
     
+    // Configure selective module scanning
+    if (options.selective_scan) {
+        // Disable all modules first
+        engine.DisableModule(ModuleType::Accounts);
+        engine.DisableModule(ModuleType::Services);
+        engine.DisableModule(ModuleType::Processes);
+        engine.DisableModule(ModuleType::Network);
+        engine.DisableModule(ModuleType::Registry);
+        engine.DisableModule(ModuleType::Memory);
+        
+        // Enable only selected modules
+        if (options.accounts_only) {
+            engine.EnableModule(ModuleType::Accounts);
+            Logger::Instance().Debug(L"Enabled Accounts module");
+        }
+        if (options.services_only) {
+            engine.EnableModule(ModuleType::Services);
+            Logger::Instance().Debug(L"Enabled Services module");
+        }
+        if (options.processes_only) {
+            engine.EnableModule(ModuleType::Processes);
+            Logger::Instance().Debug(L"Enabled Processes module");
+        }
+        if (options.network_only) {
+            engine.EnableModule(ModuleType::Network);
+            Logger::Instance().Debug(L"Enabled Network module");
+        }
+        if (options.registry_only) {
+            engine.EnableModule(ModuleType::Registry);
+            Logger::Instance().Debug(L"Enabled Registry module");
+        }
+        if (options.memory_only) {
+            engine.EnableModule(ModuleType::Memory);
+            Logger::Instance().Debug(L"Enabled Memory module");
+        }
+    } else {
+        // Full scan - ensure all modules are enabled
+        engine.EnableModule(ModuleType::Accounts);
+        engine.EnableModule(ModuleType::Services);
+        engine.EnableModule(ModuleType::Processes);
+        engine.EnableModule(ModuleType::Network);
+        engine.EnableModule(ModuleType::Registry);
+        engine.EnableModule(ModuleType::Memory);
+    }
+    
     // Display scan information
     if (!options.quiet) {
-        std::wcout << L"🔍 Starting system scan...\n";
+        std::wcout << L"[*] Starting system scan...\n";
         
         if (options.stealth) {
-            std::wcout << L"  🕵️  Stealth Mode: Enabled\n";
+            std::wcout << L"  [STEALTH] Stealth Mode: Enabled\n";
         }
         
         if (options.quick) {
-            std::wcout << L"  ⚡ Quick Scan: Enabled\n";
+            std::wcout << L"  [QUICK] Quick Scan: Enabled\n";
         }
         
         if (options.selective_scan) {
-            std::wcout << L"\n📋 Scanning selected modules:\n";
-            if (options.accounts_only) std::wcout << L"  ✓ User Accounts & Groups\n";
-            if (options.services_only) std::wcout << L"  ✓ Windows Services\n";
-            if (options.processes_only) std::wcout << L"  ✓ Running Processes\n";
-            if (options.network_only) std::wcout << L"  ✓ Network Connections\n";
-            if (options.registry_only) std::wcout << L"  ✓ Registry Keys\n";
-            if (options.memory_only) std::wcout << L"  ✓ Process Memory\n";
+            std::wcout << L"\n[MODULES] Scanning selected modules:\n";
+            if (options.accounts_only) std::wcout << L"  * User Accounts & Groups\n";
+            if (options.services_only) std::wcout << L"  * Windows Services\n";
+            if (options.processes_only) std::wcout << L"  * Running Processes\n";
+            if (options.network_only) std::wcout << L"  * Network Connections\n";
+            if (options.registry_only) std::wcout << L"  * Registry Keys\n";
+            if (options.memory_only) std::wcout << L"  * Process Memory\n";
             std::wcout << L"\n";
         } else {
-            std::wcout << L"  📦 Full system scan (all modules)\n\n";
+            std::wcout << L"  [FULL] Full system scan (all modules)\n\n";
         }
     }
     
@@ -474,14 +542,14 @@ int RunScan(CommandLineOptions& options) {
     Logger::Instance().Info(L"Scan completed successfully!");
     
     if (!options.quiet) {
-        std::wcout << L"\n✅ Scan completed!\n\n";
+        std::wcout << L"\n[+] Scan completed!\n\n";
     }
     
     // Generate reports
     Logger::Instance().Info(L"Generating reports...");
     
     if (!options.quiet) {
-        std::wcout << L"📄 Generating reports...\n";
+        std::wcout << L"[REPORTS] Generating reports...\n";
     }
     
     String timestamp = Core::Utils::GetCurrentTimestamp();
@@ -503,12 +571,12 @@ int RunScan(CommandLineOptions& options) {
         if (engine.ExportResults(format, file_path)) {
             reports_generated++;
             if (!options.quiet) {
-                std::wcout << L"  ✓ " << format << L" report: " << file_path << L"\n";
+                std::wcout << L"  [+] " << format << L" report: " << file_path << L"\n";
             }
             Logger::Instance().Info(L"Generated " + format + L" report: " + file_path);
         } else {
             reports_failed++;
-            std::wcerr << L"  ✗ Failed to generate " << format << L" report\n";
+            std::wcerr << L"  [-] Failed to generate " << format << L" report\n";
             Logger::Instance().Error(L"Failed to generate " + format + L" report");
         }
     }
@@ -516,13 +584,13 @@ int RunScan(CommandLineOptions& options) {
     if (!options.quiet) {
         std::wcout << L"\n";
         if (reports_generated > 0) {
-            std::wcout << L"✅ Successfully generated " << reports_generated << L" report(s)\n";
+            std::wcout << L"[+] Successfully generated " << reports_generated << L" report(s)\n";
         }
         if (reports_failed > 0) {
-            std::wcout << L"⚠️  Failed to generate " << reports_failed << L" report(s)\n";
+            std::wcout << L"[!] Failed to generate " << reports_failed << L" report(s)\n";
         }
         
-        std::wcout << L"\n📁 Reports saved to: " << options.output_dir << L"\n";
+        std::wcout << L"\n[OUTPUT] Reports saved to: " << options.output_dir << L"\n";
         std::wcout << L"\nScan complete! Review the reports for detailed findings.\n";
     }
     
@@ -536,26 +604,27 @@ int RunScan(CommandLineOptions& options) {
 
 // Interactive menu mode
 int InteractiveMode() {
-    CommandLineOptions options;
-    bool running = true;
-    
-    while (running) {
-        ShowMainMenu();
-        int choice = GetMenuChoice(0, 8);
+    try {
+        CommandLineOptions options;
+        bool running = true;
         
-        switch (choice) {
-            case 1: { // Full scan
-                std::wcout << L"\n🔍 Running full system scan...\n";
-                WaitForKey();
-                int result = RunScan(options);
-                if (result == 0) {
-                    std::wcout << L"\n✅ Scan completed successfully!\n";
-                } else {
-                    std::wcout << L"\n❌ Scan failed! Check the logs for details.\n";
+        while (running) {
+            ShowMainMenu();
+            int choice = GetMenuChoice(0, 8);
+            
+            switch (choice) {
+                case 1: { // Full scan
+                    std::wcout << L"\n[*] Running full system scan...\n";
+                    WaitForKey();
+                    int result = RunScan(options);
+                    if (result == 0) {
+                        std::wcout << L"\n[+] Scan completed successfully!\n";
+                    } else {
+                        std::wcout << L"\n[-] Scan failed! Check the logs for details.\n";
+                    }
+                    WaitForKey();
+                    break;
                 }
-                WaitForKey();
-                break;
-            }
             
             case 2: { // Selective scan
                 bool selecting = true;
@@ -599,18 +668,18 @@ int InteractiveMode() {
                             break;
                         case 8:
                             if (options.selective_scan) {
-                                std::wcout << L"\n🔍 Starting selective scan...\n";
+                                std::wcout << L"\n[*] Starting selective scan...\n";
                                 WaitForKey();
                                 int result = RunScan(options);
                                 if (result == 0) {
-                                    std::wcout << L"\n✅ Scan completed successfully!\n";
+                                    std::wcout << L"\n[+] Scan completed successfully!\n";
                                 } else {
-                                    std::wcout << L"\n❌ Scan failed! Check the logs for details.\n";
+                                    std::wcout << L"\n[-] Scan failed! Check the logs for details.\n";
                                 }
                                 WaitForKey();
                                 selecting = false;
                             } else {
-                                std::wcout << L"\n⚠️  Please select at least one module!\n";
+                                std::wcout << L"\n[!] Please select at least one module!\n";
                                 WaitForKey();
                             }
                             break;
@@ -623,22 +692,22 @@ int InteractiveMode() {
             }
             
             case 3: { // Quick scan
-                std::wcout << L"\n⚡ Running quick scan (skipping deep analysis)...\n";
+                std::wcout << L"\n[QUICK] Running quick scan (skipping deep analysis)...\n";
                 options.quick = true;
                 WaitForKey();
                 int result = RunScan(options);
                 options.quick = false;
                 if (result == 0) {
-                    std::wcout << L"\n✅ Quick scan completed successfully!\n";
+                    std::wcout << L"\n[+] Quick scan completed successfully!\n";
                 } else {
-                    std::wcout << L"\n❌ Quick scan failed! Check the logs for details.\n";
+                    std::wcout << L"\n[-] Quick scan failed! Check the logs for details.\n";
                 }
                 WaitForKey();
                 break;
             }
             
             case 4: { // Stealth mode
-                std::wcout << L"\n🕵️  Running stealth mode scan (minimal footprint)...\n";
+                std::wcout << L"\n[STEALTH] Running stealth mode scan (minimal footprint)...\n";
                 options.stealth = true;
                 options.quiet = true;
                 WaitForKey();
@@ -646,9 +715,9 @@ int InteractiveMode() {
                 options.stealth = false;
                 options.quiet = false;
                 if (result == 0) {
-                    std::wcout << L"\n✅ Stealth scan completed successfully!\n";
+                    std::wcout << L"\n[+] Stealth scan completed successfully!\n";
                 } else {
-                    std::wcout << L"\n❌ Stealth scan failed! Check the logs for details.\n";
+                    std::wcout << L"\n[-] Stealth scan failed! Check the logs for details.\n";
                 }
                 WaitForKey();
                 break;
@@ -665,7 +734,7 @@ int InteractiveMode() {
                             String newDir = GetStringInput(L"Enter output directory", options.output_dir);
                             if (!newDir.empty()) {
                                 options.output_dir = newDir;
-                                std::wcout << L"✓ Output directory changed to: " << newDir << L"\n";
+                                std::wcout << L"[+] Output directory changed to: " << newDir << L"\n";
                             }
                             WaitForKey();
                             break;
@@ -676,19 +745,19 @@ int InteractiveMode() {
                             switch (repChoice) {
                                 case 1:
                                     options.formats = {L"json"};
-                                    std::wcout << L"✓ Report format set to JSON\n";
+                                    std::wcout << L"[+] Report format set to JSON\n";
                                     break;
                                 case 2:
                                     options.formats = {L"csv"};
-                                    std::wcout << L"✓ Report format set to CSV\n";
+                                    std::wcout << L"[+] Report format set to CSV\n";
                                     break;
                                 case 3:
                                     options.formats = {L"html"};
-                                    std::wcout << L"✓ Report format set to HTML\n";
+                                    std::wcout << L"[+] Report format set to HTML\n";
                                     break;
                                 case 4:
                                     options.formats = {L"json", L"csv", L"html"};
-                                    std::wcout << L"✓ Report format set to ALL formats\n";
+                                    std::wcout << L"[+] Report format set to ALL formats\n";
                                     break;
                             }
                             WaitForKey();
@@ -697,20 +766,20 @@ int InteractiveMode() {
                         case 3:
                             options.verbose = !options.verbose;
                             if (options.verbose) options.quiet = false;
-                            std::wcout << L"✓ Verbose mode " << (options.verbose ? L"enabled" : L"disabled") << L"\n";
+                            std::wcout << L"[+] Verbose mode " << (options.verbose ? L"enabled" : L"disabled") << L"\n";
                             WaitForKey();
                             break;
                         case 4:
                             options.quiet = !options.quiet;
                             if (options.quiet) options.verbose = false;
-                            std::wcout << L"✓ Quiet mode " << (options.quiet ? L"enabled" : L"disabled") << L"\n";
+                            std::wcout << L"[+] Quiet mode " << (options.quiet ? L"enabled" : L"disabled") << L"\n";
                             WaitForKey();
                             break;
                         case 5: {
                             String newConfig = GetStringInput(L"Enter config file path", options.config_file);
                             if (!newConfig.empty()) {
                                 options.config_file = newConfig;
-                                std::wcout << L"✓ Config file changed to: " << newConfig << L"\n";
+                                std::wcout << L"[+] Config file changed to: " << newConfig << L"\n";
                             }
                             WaitForKey();
                             break;
@@ -730,22 +799,22 @@ int InteractiveMode() {
                 switch (repChoice) {
                     case 1:
                         options.formats = {L"json"};
-                        std::wcout << L"\n✓ Report format set to JSON\n";
+                        std::wcout << L"\n[+] Report format set to JSON\n";
                         WaitForKey();
                         break;
                     case 2:
                         options.formats = {L"csv"};
-                        std::wcout << L"\n✓ Report format set to CSV\n";
+                        std::wcout << L"\n[+] Report format set to CSV\n";
                         WaitForKey();
                         break;
                     case 3:
                         options.formats = {L"html"};
-                        std::wcout << L"\n✓ Report format set to HTML\n";
+                        std::wcout << L"\n[+] Report format set to HTML\n";
                         WaitForKey();
                         break;
                     case 4:
                         options.formats = {L"json", L"csv", L"html"};
-                        std::wcout << L"\n✓ Report format set to ALL formats\n";
+                        std::wcout << L"\n[+] Report format set to ALL formats\n";
                         WaitForKey();
                         break;
                 }
@@ -773,6 +842,18 @@ int InteractiveMode() {
     }
     
     return 0;
+    
+    } catch (const std::exception& e) {
+        std::wcerr << L"\n[ERROR] FATAL ERROR: " << e.what() << L"\n";
+        std::wcerr << L"Press any key to exit...\n";
+        WaitForKey();
+        return 1;
+    } catch (...) {
+        std::wcerr << L"\n[ERROR] FATAL ERROR: Unknown exception occurred\n";
+        std::wcerr << L"Press any key to exit...\n";
+        WaitForKey();
+        return 1;
+    }
 }
 
 int wmain(int argc, wchar_t* argv[]);
@@ -782,29 +863,80 @@ int main() {
 }
 
 int wmain(int argc, wchar_t* argv[]) {
-    // If no arguments provided, launch interactive menu
-    if (argc == 1) {
-        return InteractiveMode();
-    }
-    
-    // Parse command-line arguments
-    CommandLineOptions options;
-    
-    if (!ParseArguments(argc, argv, options)) {
+    try {
+        // Check if we already have a console attached
+        HWND consoleWindow = GetConsoleWindow();
+        
+        // Only allocate a new console if we don't have one
+        if (consoleWindow == NULL) {
+            if (!AllocConsole()) {
+                // If AllocConsole fails, we might already have one
+                // This is not a critical error, continue
+            }
+            
+            // Reopen standard streams only if we just created a console
+            FILE* fpStdout = nullptr;
+            FILE* fpStderr = nullptr;
+            FILE* fpStdin = nullptr;
+            
+            freopen_s(&fpStdout, "CONOUT$", "w", stdout);
+            freopen_s(&fpStderr, "CONOUT$", "w", stderr);
+            freopen_s(&fpStdin, "CONIN$", "r", stdin);
+        }
+        
+        // Initialize console for Unicode output
+        SetConsoleOutputCP(CP_UTF8);
+        SetConsoleCP(CP_UTF8);
+        
+        // Set console mode to support ANSI escape codes and Unicode
+        HANDLE hStdout = GetStdHandle(STD_OUTPUT_HANDLE);
+        DWORD consoleMode;
+        if (GetConsoleMode(hStdout, &consoleMode)) {
+            consoleMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+            SetConsoleMode(hStdout, consoleMode);
+        }
+        
+        // Set locale for proper wide character output
+        setlocale(LC_ALL, ".UTF8");
+        
+        // Sync C++ streams with C streams
+        std::ios::sync_with_stdio(true);
+        
+        // If no arguments provided, launch interactive menu
+        if (argc == 1) {
+            return InteractiveMode();
+        }
+        
+        // Parse command-line arguments
+        CommandLineOptions options;
+        
+        if (!ParseArguments(argc, argv, options)) {
+            return 1;
+        }
+        
+        // Handle help and version
+        if (options.show_help) {
+            PrintHelp();
+            return 0;
+        }
+        
+        if (options.show_version) {
+            PrintVersion();
+            return 0;
+        }
+        
+        // Run scan with command-line options
+        return RunScan(options);
+        
+    } catch (const std::exception& e) {
+        std::wcerr << L"\n[ERROR] FATAL ERROR: " << e.what() << L"\n";
+        std::wcerr << L"Press ENTER to exit...\n";
+        std::wcin.get();
+        return 1;
+    } catch (...) {
+        std::wcerr << L"\n[ERROR] FATAL ERROR: Unknown exception occurred\n";
+        std::wcerr << L"Press ENTER to exit...\n";
+        std::wcin.get();
         return 1;
     }
-    
-    // Handle help and version
-    if (options.show_help) {
-        PrintHelp();
-        return 0;
-    }
-    
-    if (options.show_version) {
-        PrintVersion();
-        return 0;
-    }
-    
-    // Run scan with command-line options
-    return RunScan(options);
 }
