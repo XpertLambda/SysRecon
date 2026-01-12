@@ -6,7 +6,9 @@
 [![License](https://img.shields.io/badge/license-Commercial-red.svg)](LICENSE)
 [![Build](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/XpertLambda/SysRecon)
 
-# ⚠️ Work In Progress (WIP) : This version is not yet usable
+## ⚠️ Work In Progress (WIP) : This version is not yet usable
+
+---
 
 **Professional-grade security auditing and reconnaissance solution for Windows environments**
 
