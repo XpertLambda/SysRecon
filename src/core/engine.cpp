@@ -302,6 +302,8 @@ bool ScanEngine::RunModuleScan(ModuleType module) {
                 return run_all(L"Registry", {
                     {L"startup key analysis", [&] { return registry_analyzer_->AnalyzeStartupKeys(); }},
                     {L"policy analysis",      [&] { return registry_analyzer_->AnalyzePolicies(); }},
+                    {L"permission analysis",  [&] { return registry_analyzer_->AnalyzePermissions(); }},
+                    {L"custom key scan",      [&] { return registry_analyzer_->ScanCustomKeys(); }},
                 });
             }
             break;

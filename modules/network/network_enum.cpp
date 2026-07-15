@@ -313,19 +313,19 @@ bool NetworkEnumerator::EnumerateShares() {
         result.risk_level = share.risk_level;
         result.details[L"path"] = share.path;
         result.details[L"current_uses"] = std::to_wstring(share.current_uses);
-        result.details[L"permissions"] = std::to_wstring(share.permissions);
-        
-        // Check for risky shares
-        if (share.permissions == 0 || share.permissions == ACCESS_ALL) {
-            result.details[L"warning"] = L"Share has full access permissions";
-            result.risk_level = SecurityLevel::High;
-        }
-        
-        // Check for admin shares (ending with $)
+
+        // shi2_permissions is NOT reported here: it only ever applied to
+        // share-level security (Win9x) and is always 0 on any modern Windows.
+        // Treating 0 as "full access" flagged every share on every host as
+        // High -- and contradicted AssessShareRisk, which had already cleared
+        // admin shares. Effective access is governed by the share ACL, which
+        // this build does not evaluate.
+        result.details[L"note"] = L"Share ACLs are not evaluated; review access rights manually";
+
         if (!share.share_name.empty() && share.share_name.back() == L'$') {
             result.details[L"type"] = L"Administrative share";
         }
-        
+
         scan_results_.push_back(result);
     }
     
@@ -444,29 +444,18 @@ SecurityLevel NetworkEnumerator::AssessPortRisk(const ListeningPort& port) {
 }
 
 SecurityLevel NetworkEnumerator::AssessShareRisk(const NetworkShare& share) {
-    // Admin shares (ending with $) are normal
+    // Admin shares (ending with $) are created by Windows itself.
     if (!share.share_name.empty() && share.share_name.back() == L'$') {
         return SecurityLevel::Low;
     }
-    
-    // Shares with full access are risky
-    if (share.permissions == 0 || share.permissions == ACCESS_ALL) {
-        return SecurityLevel::High;
-    }
-    
-    return SecurityLevel::Low;
+
+    // A user-created share is worth an analyst's attention, but it is not
+    // High on its own. shi2_permissions cannot be used to decide: it is
+    // always 0 on modern Windows, so the previous check reported every
+    // share as High regardless of its actual ACL.
+    return SecurityLevel::Medium;
 }
 
-// Stub implementations for unimplemented methods
-StringVector NetworkEnumerator::FindSuspiciousConnections() { return StringVector(); }
-StringVector NetworkEnumerator::FindOpenPorts() { return StringVector(); }
-StringVector NetworkEnumerator::FindUnsecureShares() { return StringVector(); }
-StringVector NetworkEnumerator::FindSuspiciousPorts() { return StringVector(); }
-bool NetworkEnumerator::IsPortKnown(USHORT, const String&) { return false; }
-bool NetworkEnumerator::IsAddressPrivate(const String&) { return false; }
-bool NetworkEnumerator::IsAddressSuspicious(const String&) { return false; }
-String NetworkEnumerator::ResolveHostname(const String&) { return L""; }
-String NetworkEnumerator::GetPortDescription(USHORT, const String&) { return L""; }
 
 } // namespace Modules
 } // namespace SysRecon

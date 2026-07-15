@@ -87,66 +87,22 @@ public:
     SecurityLevel AssessPortRisk(const ListeningPort& port);
     SecurityLevel AssessShareRisk(const NetworkShare& share);
     
-    StringVector FindSuspiciousConnections();
-    StringVector FindOpenPorts();
-    StringVector FindUnsecureShares();
-    StringVector FindSuspiciousPorts();
-    
-    // Network analysis
-    bool IsPortKnown(USHORT port, const String& protocol);
-    bool IsAddressPrivate(const String& address);
-    bool IsAddressSuspicious(const String& address);
-    String ResolveHostname(const String& ip_address);
-    String GetPortDescription(USHORT port, const String& protocol);
-    
 private:
-    // Internal enumeration methods
-    bool EnumerateTcpConnections();
-    bool EnumerateUdpConnections();
-    bool EnumerateTcpListeners();
-    bool EnumerateUdpListeners();
-    bool EnumerateNetworkAdapters();
-    bool EnumerateNetworkShares();
-    
-    // Connection analysis
-    void AnalyzeConnection(const NetworkConnection& connection);
-    void AnalyzeListeningPort(const ListeningPort& port);
-    void AnalyzeNetworkShare(const NetworkShare& share);
-    
-    // Firewall analysis
-    bool CheckWindowsFirewall();
-    bool GetFirewallRules(StringVector& rules);
-    bool IsFirewallEnabled();
-    
     // Helper methods
-    String GetProcessNameById(DWORD process_id);
     String ConnectionStateToString(DWORD state);
-    String ProtocolToString(DWORD protocol);
-    String MacAddressToString(const BYTE* mac_address, DWORD length);
-    String InterfaceTypeToString(DWORD type);
-    
-    // IP geolocation and reputation
-    String GetCountryFromIP(const String& ip_address);
-    bool IsIPMalicious(const String& ip_address);
-    bool IsPortSuspicious(USHORT port, const String& protocol);
-    
+
     // Configuration
     bool scan_listening_ports_;
     bool analyze_connections_;
     bool resolve_hostnames_;
-    
+
     // Data storage
     std::vector<NetworkConnection> connections_;
     std::vector<ListeningPort> listening_ports_;
     std::vector<NetworkInterface> interfaces_;
     std::vector<NetworkShare> shares_;
     ScanResults scan_results_;
-    
-    // Caches
-    std::map<String, String> hostname_cache_;
-    std::map<DWORD, String> process_name_cache_;
-    std::map<USHORT, String> port_description_cache_;
-    
+
     // State
     bool initialized_;
     StringVector error_messages_;

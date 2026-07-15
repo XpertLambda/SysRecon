@@ -1,8 +1,81 @@
 #include "../../include/modules/registry/registry_analyzer.h"
 #include "../../include/core/whitelist.h"
+#include "../../include/core/text_utils.h"
 
 namespace SysRecon {
 namespace Modules {
+
+#ifdef _WIN32
+namespace {
+
+// Returns the names of non-administrative principals that hold write access in
+// `sd`'s DACL. A key like HKLM\...\Run that ordinary users can write to is a
+// persistence foothold, and this is what the permission check is for.
+StringVector FindWeakAcePrincipals(PSECURITY_DESCRIPTOR sd) {
+    StringVector offenders;
+
+    BOOL dacl_present = FALSE;
+    BOOL dacl_defaulted = FALSE;
+    PACL dacl = nullptr;
+    if (!GetSecurityDescriptorDacl(sd, &dacl_present, &dacl, &dacl_defaulted) ||
+        !dacl_present || dacl == nullptr) {
+        return offenders;  // No DACL: nothing we can assert.
+    }
+
+    // Well-known groups that must NOT have write access to these keys.
+    struct KnownSid { WELL_KNOWN_SID_TYPE type; const wchar_t* label; };
+    const KnownSid interesting[] = {
+        { WinWorldSid,                    L"Everyone" },
+        { WinBuiltinUsersSid,             L"BUILTIN\\Users" },
+        { WinAuthenticatedUserSid,        L"Authenticated Users" },
+        { WinInteractiveSid,              L"INTERACTIVE" },
+    };
+
+    const DWORD write_mask = KEY_SET_VALUE | KEY_CREATE_SUB_KEY | WRITE_DAC | WRITE_OWNER;
+
+    for (DWORD i = 0; i < dacl->AceCount; i++) {
+        LPVOID ace_ptr = nullptr;
+        if (!GetAce(dacl, i, &ace_ptr)) {
+            continue;
+        }
+        auto* header = static_cast<ACE_HEADER*>(ace_ptr);
+        // Only allow-ACEs grant access; deny-ACEs are not a weakness.
+        if (header->AceType != ACCESS_ALLOWED_ACE_TYPE) {
+            continue;
+        }
+
+        auto* ace = static_cast<ACCESS_ALLOWED_ACE*>(ace_ptr);
+        if ((ace->Mask & write_mask) == 0) {
+            continue;
+        }
+
+        PSID ace_sid = (PSID)&ace->SidStart;
+        if (!IsValidSid(ace_sid)) {
+            continue;
+        }
+
+        for (const auto& known : interesting) {
+            DWORD sid_size = SECURITY_MAX_SID_SIZE;
+            std::vector<BYTE> sid_buffer(sid_size);
+            PSID well_known = (PSID)sid_buffer.data();
+            if (!CreateWellKnownSid(known.type, nullptr, well_known, &sid_size)) {
+                continue;
+            }
+            if (EqualSid(ace_sid, well_known)) {
+                const String label(known.label);
+                if (std::find(offenders.begin(), offenders.end(), label) == offenders.end()) {
+                    offenders.push_back(label);
+                }
+                break;
+            }
+        }
+    }
+
+    return offenders;
+}
+
+}  // namespace
+#endif
 
 RegistryAnalyzer::RegistryAnalyzer() 
     : scan_startup_keys_(true)
@@ -239,35 +312,41 @@ bool RegistryAnalyzer::AnalyzePermissions() {
     
     for (const auto& [root_key, subkey] : sensitive_keys) {
         HKEY hKey;
-        if (RegOpenKeyExW(root_key, subkey.c_str(), 0, READ_CONTROL, &hKey) == ERROR_SUCCESS) {
-            // Get security descriptor
-            DWORD sd_size = 0;
-            SECURITY_INFORMATION si = OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION;
-            
-            // First call to get size
-            RegGetKeySecurity(hKey, si, NULL, &sd_size);
-            
-            if (sd_size > 0 && sd_size < 10000) { // Sanity check
-                std::vector<BYTE> sd_buffer(sd_size);
-                PSECURITY_DESCRIPTOR pSD = (PSECURITY_DESCRIPTOR)sd_buffer.data();
-                
-                if (RegGetKeySecurity(hKey, si, pSD, &sd_size) == ERROR_SUCCESS) {
-                    // Successfully got security descriptor
+        if (RegOpenKeyExW(root_key, subkey.c_str(), 0, READ_CONTROL, &hKey) != ERROR_SUCCESS) {
+            continue;
+        }
+
+        DWORD sd_size = 0;
+        SECURITY_INFORMATION si = OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION;
+        RegGetKeySecurity(hKey, si, NULL, &sd_size);
+
+        if (sd_size > 0 && sd_size < 65536) {
+            std::vector<BYTE> sd_buffer(sd_size);
+            PSECURITY_DESCRIPTOR pSD = (PSECURITY_DESCRIPTOR)sd_buffer.data();
+
+            if (RegGetKeySecurity(hKey, si, pSD, &sd_size) == ERROR_SUCCESS) {
+                // The descriptor is now actually parsed. Previously it was
+                // fetched and discarded, and every key produced a Low
+                // "Accessible" finding that told the analyst nothing.
+                const StringVector weak = FindWeakAcePrincipals(pSD);
+                if (!weak.empty()) {
                     ScanResult result;
                     result.module_name = L"Registry Permissions";
                     result.item_name = subkey;
-                    result.description = L"Sensitive registry key permissions checked";
-                    result.risk_level = SecurityLevel::Low;
-                    result.details[L"key"] = subkey;
-                    result.details[L"status"] = L"Accessible";
+                    result.description = L"Non-administrative principals can modify a persistence-relevant key";
+                    result.details[L"Key"] = subkey;
+                    result.details[L"Principals"] = Core::Utils::Join(weak, L", ");
+                    result.details[L"Technique"] = L"T1112 Modify Registry (weak ACL enables persistence)";
+                    result.risk_level = SecurityLevel::High;
+                    result.timestamp = std::chrono::system_clock::now();
                     scan_results_.push_back(result);
                 }
             }
-            
-            RegCloseKey(hKey);
         }
+
+        RegCloseKey(hKey);
     }
-    
+
     SYSRECON_LOG_INFO(L"Registry permission analysis complete");
     return true;
 #else
@@ -282,65 +361,105 @@ bool RegistryAnalyzer::ScanCustomKeys() {
     SYSRECON_LOG_INFO(L"Scanning custom registry keys...");
     
 #ifdef _WIN32
-    // Scan additional interesting registry locations
-    const std::vector<std::pair<HKEY, String>> custom_keys = {
-        // Scheduled tasks
-        {HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tasks"},
-        // Shell extensions
-        {HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Shell Extensions\\Approved"},
-        // Browser Helper Objects
-        {HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Browser Helper Objects"},
-        // LSA Authentication Packages
-        {HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Control\\Lsa"},
-        // Image File Execution Options (debugger hijacking)
-        {HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options"},
-    };
-    
-    for (const auto& [root_key, subkey] : custom_keys) {
-        HKEY hKey;
-        if (RegOpenKeyExW(root_key, subkey.c_str(), 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
-            
-            RegistryEntry entry;
-            entry.key_path = subkey;
-            entry.value_name = L"<Key Exists>";
-            entry.string_value = L"";
-            entry.value_type = REG_NONE;
-            entry.risk_level = SecurityLevel::Low;
-            
-            // Check for specific suspicious entries
-            if (subkey.find(L"Image File Execution Options") != String::npos) {
-                // This key can be used for debugger hijacking
-                entry.risk_level = SecurityLevel::Medium;
-                
+    registry_entries_.clear();
+
+    // Image File Execution Options is the one location here with an
+    // unambiguous abuse signal, so it gets a real check below rather than a
+    // finding for merely existing.
+    const String ifeo_path =
+        L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options";
+
+    // IFEO hijack (T1546.012): a Debugger value under an executable's subkey
+    // makes Windows launch the debugger instead of that executable. The key
+    // itself ships with every Windows install -- only a Debugger entry matters.
+    // Previously this reported Medium simply because the key existed, which is
+    // a guaranteed false positive on every host, as was the equivalent
+    // Browser Helper Objects check (now removed: presence proves nothing).
+    HKEY ifeo_key;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, ifeo_path.c_str(), 0, KEY_READ, &ifeo_key) == ERROR_SUCCESS) {
+        DWORD index = 0;
+        wchar_t subkey_name[512];
+        while (true) {
+            DWORD name_size = sizeof(subkey_name) / sizeof(subkey_name[0]);
+            if (RegEnumKeyExW(ifeo_key, index, subkey_name, &name_size,
+                              nullptr, nullptr, nullptr, nullptr) != ERROR_SUCCESS) {
+                break;
+            }
+            index++;
+
+            HKEY image_key;
+            if (RegOpenKeyExW(ifeo_key, subkey_name, 0, KEY_READ, &image_key) != ERROR_SUCCESS) {
+                continue;
+            }
+
+            wchar_t debugger[2048];
+            DWORD debugger_size = sizeof(debugger);
+            DWORD value_type = 0;
+            LONG got = RegQueryValueExW(image_key, L"Debugger", nullptr, &value_type,
+                                        (LPBYTE)debugger, &debugger_size);
+
+            if (got == ERROR_SUCCESS &&
+                (value_type == REG_SZ || value_type == REG_EXPAND_SZ) &&
+                debugger_size >= sizeof(wchar_t)) {
+
+                size_t chars = debugger_size / sizeof(wchar_t);
+                if (debugger[chars - 1] == L'\0') {
+                    chars--;
+                }
+                const String debugger_cmd(debugger, chars);
+
+                RegistryEntry entry;
+                entry.key_path = ifeo_path + L"\\" + subkey_name;
+                entry.value_name = L"Debugger";
+                entry.string_value = debugger_cmd;
+                entry.value_type = value_type;
+                entry.risk_level = SecurityLevel::High;
+                registry_entries_.push_back(entry);
+
                 ScanResult result;
                 result.module_name = L"Registry";
-                result.item_name = L"Image File Execution Options";
-                result.description = L"Registry key that can be used for process hijacking";
-                result.risk_level = SecurityLevel::Medium;
-                result.details[L"key"] = subkey;
-                result.details[L"note"] = L"Check for suspicious debugger entries";
+                result.item_name = String(subkey_name);
+                result.description = L"Image File Execution Options debugger set for an executable";
+                result.details[L"Key"] = entry.key_path;
+                result.details[L"Debugger"] = debugger_cmd;
+                result.details[L"Technique"] = L"T1546.012 Image File Execution Options Injection";
+                result.risk_level = SecurityLevel::High;
+                result.timestamp = std::chrono::system_clock::now();
                 scan_results_.push_back(result);
             }
-            
-            if (subkey.find(L"Browser Helper Objects") != String::npos) {
-                // BHOs can be used for malicious purposes
-                entry.risk_level = SecurityLevel::Medium;
-                
-                ScanResult result;
-                result.module_name = L"Registry";
-                result.item_name = L"Browser Helper Objects";
-                result.description = L"IE browser extensions that load automatically";
-                result.risk_level = SecurityLevel::Medium;
-                result.details[L"key"] = subkey;
-                scan_results_.push_back(result);
-            }
-            
-            registry_entries_.push_back(entry);
-            RegCloseKey(hKey);
+            RegCloseKey(image_key);
         }
+        RegCloseKey(ifeo_key);
     }
-    
-    SYSRECON_LOG_INFO(L"Scanned " + std::to_wstring(custom_keys.size()) + L" custom registry locations");
+
+    // Operator-supplied keys from config.json. AddCustomKey existed and was
+    // never called, so custom_keys was unreachable; the scan used a hardcoded
+    // list instead and ignored the config entirely.
+    for (const auto& subkey : custom_keys_) {
+        HKEY hKey;
+        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, subkey.c_str(), 0, KEY_READ, &hKey) != ERROR_SUCCESS) {
+            continue;
+        }
+        RegistryEntry entry;
+        entry.key_path = subkey;
+        entry.value_name = L"<key present>";
+        entry.value_type = REG_NONE;
+        entry.risk_level = SecurityLevel::Low;
+        registry_entries_.push_back(entry);
+
+        ScanResult result;
+        result.module_name = L"Registry";
+        result.item_name = subkey;
+        result.description = L"Operator-specified registry key is present";
+        result.details[L"Key"] = subkey;
+        result.risk_level = SecurityLevel::Low;
+        result.timestamp = std::chrono::system_clock::now();
+        scan_results_.push_back(result);
+        RegCloseKey(hKey);
+    }
+
+    SYSRECON_LOG_INFO(L"Custom key scan complete (" +
+                      std::to_wstring(registry_entries_.size()) + L" entries of interest)");
     return true;
 #else
     SYSRECON_LOG_INFO(L"Custom key scanning only available on Windows");
