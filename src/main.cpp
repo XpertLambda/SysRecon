@@ -19,7 +19,10 @@ struct CommandLineOptions {
     bool stealth = false;
     bool quick = false;
     String config_file = L"config.json";
-    String output_dir = L"./reports";
+    // Empty means "not specified on the command line", so config.json's
+    // output_directory is not clobbered by a CLI default. The engine resolves
+    // the effective value (CLI flag > config file > ./reports).
+    String output_dir;
     StringVector formats = {L"json", L"csv", L"html"};
     
     // Module selection (empty = all modules)
@@ -257,7 +260,9 @@ void ShowConfigurationMenu(CommandLineOptions& options) {
     std::wcout << L"Current Settings:\n";
     std::wcout << L"────────────────────────────────────────────────────────────────────\n";
     std::wcout << L"  Config File:    " << options.config_file << L"\n";
-    std::wcout << L"  Output Dir:     " << options.output_dir << L"\n";
+    std::wcout << L"  Output Dir:     "
+               << (options.output_dir.empty() ? L"(from config, default ./reports)" : options.output_dir)
+               << L"\n";
     std::wcout << L"  Report Formats: ";
     for (size_t i = 0; i < options.formats.size(); i++) {
         if (i > 0) std::wcout << L", ";
@@ -464,19 +469,31 @@ int RunScan(CommandLineOptions& options) {
     // Create scan engine
     ScanEngine& engine = ScanEngine::Instance();
     
-    // Load configuration if file exists
+    // Load configuration if file exists. This must happen before Initialize(),
+    // which builds the module set from the current selection.
     if (Core::Utils::FileExists(options.config_file)) {
-        Logger::Instance().Info(L"Loading configuration from: " + options.config_file);
-        // TODO: Load config into engine
+        engine.LoadConfig(options.config_file);
     } else if (options.config_file != L"config.json") {
         Logger::Instance().Warning(L"Configuration file not found: " + options.config_file);
     }
-    
+
+    // Command-line flags are applied after the config file, so an explicit
+    // flag always wins over the file.
+    if (!options.output_dir.empty()) {
+        engine.SetOutputDirectory(options.output_dir);
+    }
+    if (options.stealth) {
+        engine.SetStealthMode(true);
+    }
+
     // Initialize engine
     if (!engine.Initialize()) {
         Logger::Instance().Error(L"Failed to initialize scan engine");
         return 1;
     }
+
+    // Modules exist only after Initialize(), so per-module options land here.
+    engine.ApplyConfigToModules();
     
     // Configure selective module scanning
     if (options.selective_scan) {
@@ -586,20 +603,23 @@ int RunScan(CommandLineOptions& options) {
     }
     
     String timestamp = Core::Utils::GetCurrentTimestamp();
-    
-    // Create output directory
-    if (!Core::Utils::DirectoryExists(options.output_dir)) {
-        Logger::Instance().Info(L"Creating output directory: " + options.output_dir);
-        Core::Utils::CreateDirectory(options.output_dir);
+
+    // The engine owns the resolved output directory (CLI flag > config file >
+    // default). Deriving it independently here is what made -o create one
+    // directory and write reports into another.
+    const String output_dir = engine.GetOutputDirectory();
+    if (!Core::Utils::DirectoryExists(output_dir)) {
+        Logger::Instance().Info(L"Creating output directory: " + output_dir);
+        Core::Utils::CreateDirectory(output_dir);
     }
-    
+
     // Generate reports in requested formats
     int reports_generated = 0;
     int reports_failed = 0;
-    
+
     for (const auto& format : options.formats) {
         String extension = format;
-        String file_path = options.output_dir + L"/scan_" + timestamp + L"." + extension;
+        String file_path = output_dir + L"/scan_" + timestamp + L"." + extension;
         
         if (engine.ExportResults(format, file_path)) {
             reports_generated++;
@@ -623,7 +643,7 @@ int RunScan(CommandLineOptions& options) {
             std::wcout << L"[!] Failed to generate " << reports_failed << L" report(s)\n";
         }
         
-        std::wcout << L"\n[OUTPUT] Reports saved to: " << options.output_dir << L"\n";
+        std::wcout << L"\n[OUTPUT] Reports saved to: " << output_dir << L"\n";
         std::wcout << L"\nScan complete! Review the reports for detailed findings.\n";
     }
     

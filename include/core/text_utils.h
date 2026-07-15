@@ -33,6 +33,15 @@ bool IsPathUnder(const WString& path, const WString& prefix);
 
 WString ToLowerAscii(const WString& value);
 
+// True if a path sits in a location any unprivileged user can write to, and
+// from which binaries do not normally execute (temp dirs, Downloads, the
+// recycle bin, ProgramData, Public). Not proof of anything on its own -- it
+// raises a finding's risk, it never clears one.
+bool IsUserWritableExecutionPath(const WString& path);
+
+// Extracts the filename component of a path ("C:\a\b\x.exe" -> "x.exe").
+WString GetFileNameComponent(const WString& path);
+
 // Extracts the executable path from a command line, so callers can check where
 // a binary actually lives rather than trusting its name. Handles both quoted
 // ("C:\Program Files\X\y.exe" -k) and unquoted (C:\Windows\x.exe /a) forms.

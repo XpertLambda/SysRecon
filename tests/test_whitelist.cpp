@@ -117,6 +117,74 @@ TEST(IsSafeUnquotedPath, RejectsUnquotedPathWhoseFirstTokenIsNotAnExecutable) {
     EXPECT_FALSE(WL().IsSafeUnquotedPath(L"C:\\Program Files\\Sub Dir\\run"));
 }
 
+// --- Name-only lookups: used to RAISE findings, never to suppress ----------
+
+TEST(SystemProcessName, MatchesKnownNameRegardlessOfPath) {
+    // This is the masquerade signal: name matches, path is checked separately.
+    EXPECT_TRUE(WL().IsSystemProcessName(L"svchost.exe"));
+    EXPECT_TRUE(WL().IsSystemProcessName(L"SVCHOST.EXE"));
+    EXPECT_FALSE(WL().IsSystemProcessName(L"totally-not-malware.exe"));
+}
+
+TEST(SystemDllName, MatchesKnownDllForSideloadingDetection) {
+    EXPECT_TRUE(WL().IsSystemDllName(L"ntdll.dll"));
+    EXPECT_FALSE(WL().IsSystemDllName(L"mygame.dll"));
+}
+
+TEST(MasqueradeSignal, KnownNameOutsideSystemPathIsDetectable) {
+    // The exact condition the Processes module flags as T1036.005.
+    const SysRecon::String name = L"svchost.exe";
+    const SysRecon::String path = L"C:\\Temp\\svchost.exe";
+    EXPECT_TRUE(WL().IsSystemProcessName(name));
+    EXPECT_FALSE(WL().IsSystemPath(path));
+    EXPECT_FALSE(WL().IsSystemProcess(name, path));
+}
+
+// --- Execution-path helpers ------------------------------------------------
+
+TEST(UserWritableExecutionPath, FlagsCommonDropLocations) {
+    using namespace SysRecon::Core::Text;
+    EXPECT_TRUE(IsUserWritableExecutionPath(L"C:\\Users\\bob\\AppData\\Local\\Temp\\x.exe"));
+    EXPECT_TRUE(IsUserWritableExecutionPath(L"C:\\Windows\\Temp\\x.exe"));
+    EXPECT_TRUE(IsUserWritableExecutionPath(L"C:\\Users\\bob\\Downloads\\setup.exe"));
+    EXPECT_TRUE(IsUserWritableExecutionPath(L"C:\\Users\\Public\\x.exe"));
+    EXPECT_TRUE(IsUserWritableExecutionPath(L"C:\\$Recycle.Bin\\S-1-5-21\\x.exe"));
+}
+
+TEST(UserWritableExecutionPath, IgnoresNormalInstallLocations) {
+    using namespace SysRecon::Core::Text;
+    EXPECT_FALSE(IsUserWritableExecutionPath(L"C:\\Windows\\System32\\svchost.exe"));
+    EXPECT_FALSE(IsUserWritableExecutionPath(L"C:\\Program Files\\App\\app.exe"));
+    EXPECT_FALSE(IsUserWritableExecutionPath(L""));
+}
+
+TEST(ExtractExecutablePath, HandlesQuotedAndUnquotedCommands) {
+    using namespace SysRecon::Core::Text;
+    EXPECT_EQ(ExtractExecutablePath(L"\"C:\\Program Files\\X\\y.exe\" -k netsvcs"),
+              L"C:\\Program Files\\X\\y.exe");
+    EXPECT_EQ(ExtractExecutablePath(L"C:\\Windows\\System32\\svchost.exe -k netsvcs"),
+              L"C:\\Windows\\System32\\svchost.exe");
+    EXPECT_EQ(ExtractExecutablePath(L"  C:\\Windows\\x.exe"), L"C:\\Windows\\x.exe");
+}
+
+TEST(ExtractExecutablePath, ReturnsExeNotTrailingArgumentForRundll) {
+    using namespace SysRecon::Core::Text;
+    EXPECT_EQ(ExtractExecutablePath(L"C:\\Windows\\system32\\rundll32.exe foo.dll,Entry"),
+              L"C:\\Windows\\system32\\rundll32.exe");
+}
+
+TEST(ExtractExecutablePath, ReturnsEmptyOnUnterminatedQuote) {
+    using namespace SysRecon::Core::Text;
+    EXPECT_EQ(ExtractExecutablePath(L"\"C:\\broken\\path.exe"), L"");
+    EXPECT_EQ(ExtractExecutablePath(L"   "), L"");
+}
+
+TEST(GetFileNameComponent, ExtractsLeafName) {
+    using namespace SysRecon::Core::Text;
+    EXPECT_EQ(GetFileNameComponent(L"C:\\a\\b\\x.exe"), L"x.exe");
+    EXPECT_EQ(GetFileNameComponent(L"x.exe"), L"x.exe");
+}
+
 // --- Operator-configurable trust -------------------------------------------
 
 TEST(TrustedPath, OperatorCanWhitelistOrgSpecificLocation) {

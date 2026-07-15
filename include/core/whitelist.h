@@ -33,6 +33,13 @@ public:
     // boundaries: "C:\WindowsUpdate\evil.exe" is NOT under "C:\Windows".
     bool IsSystemPath(const String& path) const;
 
+    // Name-only lookups. These exist to RAISE findings, never to suppress
+    // them: a well-known system name running from outside a system directory
+    // is the masquerading signal itself (T1036.005). Do not use these to
+    // whitelist anything -- use the path-aware checks above.
+    bool IsSystemProcessName(const String& process_name) const;
+    bool IsSystemDllName(const String& dll_name) const;
+
     // True only for an exact (case-insensitive) name match whose referenced
     // image also lives under a system path. Substring matching is deliberately
     // not used: it let a Run entry named "OneDrive Updater" suppress itself.
@@ -125,6 +132,14 @@ inline bool SystemWhitelist::IsSystemPath(const String& path) const {
         }
     }
     return false;
+}
+
+inline bool SystemWhitelist::IsSystemProcessName(const String& process_name) const {
+    return IsKnownName(system_processes_, process_name);
+}
+
+inline bool SystemWhitelist::IsSystemDllName(const String& dll_name) const {
+    return IsKnownName(system_dlls_, dll_name);
 }
 
 inline bool SystemWhitelist::IsSystemProcess(const String& process_name, const String& image_path) const {

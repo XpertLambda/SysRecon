@@ -54,9 +54,6 @@ public:
     // Main enumeration methods
     bool Initialize();
     bool EnumerateServices();
-    bool AnalyzeStartupServices();
-    bool CheckServicePermissions();
-    bool VerifySignatures();
     void Cleanup();
     
     // Results access

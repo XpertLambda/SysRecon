@@ -227,26 +227,55 @@ bool MemoryAnalyzer::CreateMemoryDump(DWORD process_id, const String& output_pat
 
 bool MemoryAnalyzer::CreateMiniDump(DWORD process_id, const String& output_path) {
 #ifdef _WIN32
-    HANDLE hProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, process_id);
+    // MiniDumpWriteDump needs both of these rights; the previous
+    // PROCESS_QUERY_INFORMATION | PROCESS_VM_READ was not sufficient.
+    HANDLE hProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
+                                  FALSE, process_id);
     if (hProcess == NULL) {
+        SYSRECON_LOG_ERROR(L"Dump: cannot open PID " + std::to_wstring(process_id) +
+                           L": " + Core::Utils::GetLastErrorString());
         return false;
     }
-    
-    HANDLE hFile = CreateFileW(output_path.c_str(), GENERIC_WRITE, 0, NULL, 
+
+    HANDLE hFile = CreateFileW(output_path.c_str(), GENERIC_WRITE, 0, NULL,
                                CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE) {
+        SYSRECON_LOG_ERROR(L"Dump: cannot create " + output_path + L": " +
+                           Core::Utils::GetLastErrorString());
         CloseHandle(hProcess);
         return false;
     }
-    
-    // Note: MiniDumpWriteDump requires dbghelp.dll
-    // For cross-compilation, we'll just create a simple dump
-    SYSRECON_LOG_INFO(L"Memory dump created: " + output_path);
-    
+
+    // Actually write the dump. This previously logged "Memory dump created"
+    // and returned true having written zero bytes -- a forensics tool must
+    // never report a successful capture it did not perform.
+    MINIDUMP_EXCEPTION_INFORMATION* exception_info = nullptr;
+    const MINIDUMP_TYPE dump_type = static_cast<MINIDUMP_TYPE>(
+        MiniDumpWithFullMemory | MiniDumpWithHandleData | MiniDumpWithThreadInfo);
+
+    BOOL written = MiniDumpWriteDump(hProcess, process_id, hFile, dump_type,
+                                     exception_info, NULL, NULL);
+    if (!written) {
+        const String err = Core::Utils::GetLastErrorString();
+        CloseHandle(hFile);
+        CloseHandle(hProcess);
+        DeleteFileW(output_path.c_str());  // Do not leave a truncated dump behind.
+        SYSRECON_LOG_ERROR(L"Dump: MiniDumpWriteDump failed for PID " +
+                           std::to_wstring(process_id) + L": " + err);
+        return false;
+    }
+
+    LARGE_INTEGER size = {};
+    GetFileSizeEx(hFile, &size);
+
     CloseHandle(hFile);
     CloseHandle(hProcess);
+
+    SYSRECON_LOG_INFO(L"Memory dump written: " + output_path + L" (" +
+                      std::to_wstring(size.QuadPart) + L" bytes)");
     return true;
 #else
+    (void)process_id; (void)output_path;
     return false;
 #endif
 }

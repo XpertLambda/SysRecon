@@ -45,8 +45,6 @@ public:
     bool Initialize();
     bool EnumerateUsers();
     bool EnumerateGroups();
-    bool AnalyzePermissions();
-    bool CheckPasswordPolicies();
     void Cleanup();
     
     // Results access
@@ -56,8 +54,6 @@ public:
     
     // Configuration
     void SetEnumerateGroups(bool enable) { enumerate_groups_ = enable; }
-    void SetAnalyzePermissions(bool enable) { analyze_permissions_ = enable; }
-    void SetCheckPasswords(bool enable) { check_passwords_ = enable; }
     
     // Analysis methods
     bool IsUserAdmin(const String& username);
@@ -92,8 +88,6 @@ private:
     
     // Configuration
     bool enumerate_groups_;
-    bool analyze_permissions_;
-    bool check_passwords_;
     
     // Data storage
     std::vector<UserAccount> users_;

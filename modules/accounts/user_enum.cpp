@@ -6,8 +6,6 @@ namespace Modules {
 
 UserEnumerator::UserEnumerator() 
     : enumerate_groups_(true)
-    , analyze_permissions_(true)
-    , check_passwords_(false)
     , initialized_(false) {
 }
 
@@ -85,25 +83,6 @@ bool UserEnumerator::EnumerateGroups() {
     return success;
 }
 
-bool UserEnumerator::AnalyzePermissions() {
-    if (!analyze_permissions_) {
-        return true;
-    }
-    
-    SYSRECON_LOG_INFO_CTX(L"UserEnumerator", L"AnalyzePermissions", L"Analyzing user permissions");
-    
-    return true;
-}
-
-bool UserEnumerator::CheckPasswordPolicies() {
-    if (!check_passwords_) {
-        return true;
-    }
-    
-    SYSRECON_LOG_INFO_CTX(L"UserEnumerator", L"CheckPasswordPolicies", L"Checking password policies");
-    
-    return true;
-}
 
 void UserEnumerator::Cleanup() {
     users_.clear();

@@ -11,10 +11,62 @@ ScanEngine& ScanEngine::Instance() {
 
 void ScanEngine::LoadConfig(const String& config_file) {
     ConfigManager& config_mgr = ConfigManager::Instance();
-    if (config_mgr.LoadFromFile(config_file)) {
-        SYSRECON_LOG_INFO(L"Configuration loaded from: " + config_file);
-    } else {
+    if (!config_mgr.LoadFromFile(config_file)) {
         SYSRECON_LOG_WARNING(L"Failed to load configuration, using defaults");
+        return;
+    }
+    SYSRECON_LOG_INFO(L"Configuration loaded from: " + config_file);
+
+    // Apply the file's module selection to the engine. Nothing did this
+    // before: config.json was parsed and then entirely ignored, while the
+    // engine consulted only its own default-true map. Must run before
+    // Initialize(), which constructs modules based on this selection.
+    const ScanConfig& cfg = config_mgr.GetConfig();
+
+    auto select = [this](ModuleType type, bool enabled) {
+        if (enabled) {
+            EnableModule(type);
+        } else {
+            DisableModule(type);
+        }
+    };
+    select(ModuleType::Accounts,  cfg.accounts.enabled);
+    select(ModuleType::Services,  cfg.services.enabled);
+    select(ModuleType::Processes, cfg.processes.enabled);
+    select(ModuleType::Network,   cfg.network.enabled);
+    select(ModuleType::Registry,  cfg.registry.enabled);
+    select(ModuleType::Memory,    cfg.memory.enabled);
+
+    if (!cfg.output.output_directory.empty()) {
+        SetOutputDirectory(cfg.output.output_directory);
+    }
+    SetStealthMode(cfg.stealth_mode);
+    SetVerboseMode(cfg.verbose_output);
+}
+
+void ScanEngine::ApplyConfigToModules() {
+    const ScanConfig& cfg = ConfigManager::Instance().GetConfig();
+
+    // Module setters existed but were never called from anywhere, so every
+    // per-module option in config.json was decoration.
+    if (process_enum_) {
+        process_enum_->SetCheckDlls(cfg.processes.check_dlls);
+    }
+    if (registry_analyzer_) {
+        registry_analyzer_->SetScanStartupKeys(cfg.registry.scan_startup_keys);
+        registry_analyzer_->SetAnalyzePolicies(cfg.registry.analyze_policies);
+        registry_analyzer_->SetCheckPermissions(cfg.registry.check_permissions);
+        for (const auto& key : cfg.registry.custom_keys) {
+            registry_analyzer_->AddCustomKey(key);
+        }
+    }
+    if (memory_analyzer_) {
+        memory_analyzer_->SetCreateDumps(cfg.memory.create_dumps);
+        memory_analyzer_->SetAnalyzeHeap(cfg.memory.analyze_heap);
+        memory_analyzer_->SetMaxDumpSize(cfg.memory.max_dump_size_mb * 1024 * 1024);
+    }
+    if (user_enum_) {
+        user_enum_->SetEnumerateGroups(cfg.accounts.enumerate_groups);
     }
 }
 
@@ -190,55 +242,83 @@ bool ScanEngine::RunQuickScan() {
 }
 
 bool ScanEngine::RunModuleScan(ModuleType module) {
+    // Each step runs independently and every failure is recorded. These were
+    // previously chained with &&, so one failing check silently skipped the
+    // rest -- e.g. a failed EnumerateConnections() meant listening ports and
+    // interfaces were never enumerated at all.
+    auto run_all = [this](const String& module_label,
+                          std::initializer_list<std::pair<const wchar_t*, std::function<bool()>>> steps) {
+        bool all_ok = true;
+        for (const auto& step : steps) {
+            if (!step.second()) {
+                AddError(module_label + L": " + step.first + L" failed");
+                all_ok = false;
+            }
+        }
+        return all_ok;
+    };
+
     switch (module) {
         case ModuleType::Accounts:
             if (user_enum_) {
-                return user_enum_->EnumerateUsers() && 
-                       user_enum_->EnumerateGroups() &&
-                       user_enum_->AnalyzePermissions();
+                return run_all(L"Accounts", {
+                    {L"user enumeration",  [&] { return user_enum_->EnumerateUsers(); }},
+                    {L"group enumeration", [&] { return user_enum_->EnumerateGroups(); }},
+                });
             }
             break;
-            
+
         case ModuleType::Services:
             if (service_enum_) {
-                return service_enum_->EnumerateServices() &&
-                       service_enum_->AnalyzeStartupServices();
+                return run_all(L"Services", {
+                    {L"service enumeration", [&] { return service_enum_->EnumerateServices(); }},
+                });
             }
             break;
-            
+
         case ModuleType::Processes:
             if (process_enum_) {
-                return process_enum_->EnumerateProcesses() &&
-                       process_enum_->CheckLoadedModules();
+                return run_all(L"Processes", {
+                    {L"process enumeration", [&] { return process_enum_->EnumerateProcesses(); }},
+                    {L"module inspection",   [&] { return process_enum_->CheckLoadedModules(); }},
+                });
             }
             break;
-            
+
         case ModuleType::Network:
             if (network_enum_) {
-                return network_enum_->EnumerateConnections() &&
-                       network_enum_->EnumerateListeningPorts() &&
-                       network_enum_->EnumerateInterfaces();
+                return run_all(L"Network", {
+                    {L"connection enumeration", [&] { return network_enum_->EnumerateConnections(); }},
+                    {L"listening ports",        [&] { return network_enum_->EnumerateListeningPorts(); }},
+                    {L"interfaces",             [&] { return network_enum_->EnumerateInterfaces(); }},
+                    {L"shares",                 [&] { return network_enum_->EnumerateShares(); }},
+                    {L"firewall",               [&] { return network_enum_->AnalyzeFirewall(); }},
+                });
             }
             break;
-            
+
         case ModuleType::Registry:
             if (registry_analyzer_) {
-                return registry_analyzer_->AnalyzeStartupKeys() &&
-                       registry_analyzer_->AnalyzePolicies();
+                return run_all(L"Registry", {
+                    {L"startup key analysis", [&] { return registry_analyzer_->AnalyzeStartupKeys(); }},
+                    {L"policy analysis",      [&] { return registry_analyzer_->AnalyzePolicies(); }},
+                });
             }
             break;
-            
+
         case ModuleType::Memory:
             if (memory_analyzer_) {
-                return memory_analyzer_->ScanForMalware() &&
-                       memory_analyzer_->DetectInjection();
+                return run_all(L"Memory", {
+                    {L"malware scan",      [&] { return memory_analyzer_->ScanForMalware(); }},
+                    {L"injection detection", [&] { return memory_analyzer_->DetectInjection(); }},
+                });
             }
             break;
-            
+
         default:
             return false;
     }
-    
+
     return false;
 }
 

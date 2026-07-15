@@ -72,6 +72,36 @@ WString CsvEscape(const WString& value) {
     return out;
 }
 
+WString GetFileNameComponent(const WString& path) {
+    const size_t slash = path.find_last_of(L"\\/");
+    return slash == WString::npos ? path : path.substr(slash + 1);
+}
+
+bool IsUserWritableExecutionPath(const WString& path) {
+    if (path.empty()) {
+        return false;
+    }
+    WString p = ToLowerAscii(path);
+    std::replace(p.begin(), p.end(), L'/', L'\\');
+
+    static const wchar_t* markers[] = {
+        L"\\appdata\\local\\temp\\",
+        L"\\windows\\temp\\",
+        L"\\temp\\",
+        L"\\tmp\\",
+        L"\\downloads\\",
+        L"\\users\\public\\",
+        L"\\programdata\\",
+        L"$recycle.bin",
+    };
+    for (const auto* marker : markers) {
+        if (p.find(marker) != WString::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
 WString ExtractExecutablePath(const WString& command_line) {
     size_t first = command_line.find_first_not_of(L" \t");
     if (first == WString::npos) {

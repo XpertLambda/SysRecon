@@ -16,8 +16,21 @@ class ScanEngine {
 public:
     static ScanEngine& Instance();
     
+    // Loads config.json and applies its module selection, output directory and
+    // stealth/verbose flags. Call before Initialize(), which constructs modules
+    // according to that selection.
     void LoadConfig(const String& config_file);
+
+    // Pushes per-module options from the loaded config into the module objects.
+    // Call after Initialize(), once the modules exist.
+    void ApplyConfigToModules();
+
     void SetOutputDirectory(const String& output_dir);
+
+    // The effective output directory after config file and CLI flags have been
+    // resolved. Callers must use this rather than re-deriving a path, or the
+    // two disagree and reports land somewhere the user did not ask for.
+    const String& GetOutputDirectory() const { return output_directory_; }
     void SetVerboseMode(bool verbose);
     void SetStealthMode(bool stealth);
     

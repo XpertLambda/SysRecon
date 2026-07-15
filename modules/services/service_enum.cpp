@@ -121,27 +121,6 @@ bool ServiceEnumerator::EnumerateServices() {
 #endif
 }
 
-bool ServiceEnumerator::AnalyzeStartupServices() {
-    if (!initialized_) return false;
-    
-    SYSRECON_LOG_INFO(L"Analyzing startup services...");
-    return true;
-}
-
-bool ServiceEnumerator::CheckServicePermissions() {
-    if (!initialized_) return false;
-    
-    SYSRECON_LOG_INFO(L"Checking service permissions...");
-    return true;
-}
-
-bool ServiceEnumerator::VerifySignatures() {
-    if (!initialized_) return false;
-    
-    SYSRECON_LOG_INFO(L"Verifying service signatures...");
-    return true;
-}
-
 void ServiceEnumerator::Cleanup() {
     services_.clear();
     scan_results_.clear();

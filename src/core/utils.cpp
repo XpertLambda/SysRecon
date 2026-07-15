@@ -129,7 +129,13 @@ bool DirectoryExists(const String& path) {
 bool CreateDirectory(const String& path) {
     try {
         std::filesystem::path fs_path(path);
-        return std::filesystem::create_directories(fs_path);
+        // create_directories() returns false when the directory already exists,
+        // which callers were treating as a hard failure -- the engine logged
+        // "Failed to create output directory" on every run after the first.
+        // The post-condition we actually care about is that it exists now.
+        std::error_code ec;
+        std::filesystem::create_directories(fs_path, ec);
+        return std::filesystem::is_directory(fs_path, ec);
     } catch (...) {
         return false;
     }
