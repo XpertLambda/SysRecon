@@ -1,7 +1,17 @@
 #include "../../include/modules/reporting/report_generator.h"
+#include "../../include/core/text_utils.h"
 #include <json/json.hpp>
 
 using json = nlohmann::json;
+
+namespace {
+// Every value below originates from the scanned system (registry Run value
+// names, service display names, process names) and is therefore
+// attacker-controlled. Reports must be inert.
+inline SysRecon::String H(const SysRecon::String& v) {
+    return SysRecon::Core::Text::HtmlEscape(v);
+}
+}  // namespace
 
 namespace SysRecon {
 namespace Modules {
@@ -55,7 +65,7 @@ bool ReportGenerator::GenerateJSON(const String& filename) {
         nlohmann::json j;
         
         // Scan information
-        j["scan_info"]["version"] = "1.0.0";
+        j["scan_info"]["version"] = Core::Utils::WideToUtf8(SYSRECON_VERSION);
         j["scan_info"]["timestamp"] = Core::Utils::WideToUtf8(Core::Utils::GetCurrentTimestamp());
         j["scan_info"]["hostname"] = Core::Utils::WideToUtf8(Core::Utils::GetComputerName());
         j["scan_info"]["os_version"] = Core::Utils::WideToUtf8(Core::Utils::GetWindowsVersion());
@@ -132,15 +142,24 @@ bool ReportGenerator::GenerateCSV(const String& filename) {
         return false;
     }
     
+    // BOM, so Excel reads the file as UTF-8 rather than the ANSI codepage.
+    file << "\xEF\xBB\xBF";
+
     // Header
     file << "Module,Item,Risk Level,Description,Details\n";
-    
-    // Results
+
+    // Every field goes through CsvEscape: it doubles embedded quotes per
+    // RFC 4180 (service binary paths routinely contain them) and neutralises
+    // spreadsheet formula injection, so naming a service "=cmd|'/c calc'!A1"
+    // cannot execute code when the analyst opens the report.
+    auto csv = [](const String& v) {
+        return Core::Utils::WideToUtf8(Core::Text::CsvEscape(v));
+    };
+
     for (const auto& result : scan_results_) {
-        file << "\"" << Core::Utils::WideToUtf8(result.module_name) << "\",";
-        file << "\"" << Core::Utils::WideToUtf8(result.item_name) << "\",";
-        
-        // Risk level
+        file << csv(result.module_name) << ",";
+        file << csv(result.item_name) << ",";
+
         String risk_str;
         switch (result.risk_level) {
             case SecurityLevel::Critical: risk_str = L"Critical"; break;
@@ -148,16 +167,15 @@ bool ReportGenerator::GenerateCSV(const String& filename) {
             case SecurityLevel::Medium: risk_str = L"Medium"; break;
             case SecurityLevel::Low: risk_str = L"Low"; break;
         }
-        file << "\"" << Core::Utils::WideToUtf8(risk_str) << "\",";
-        file << "\"" << Core::Utils::WideToUtf8(result.description) << "\",";
-        
-        // Concatenate details
-        std::string details_str;
+        file << csv(risk_str) << ",";
+        file << csv(result.description) << ",";
+
+        String details_str;
         for (const auto& detail : result.details) {
-            if (!details_str.empty()) details_str += "; ";
-            details_str += Core::Utils::WideToUtf8(detail.first) + ": " + Core::Utils::WideToUtf8(detail.second);
+            if (!details_str.empty()) details_str += L"; ";
+            details_str += detail.first + L": " + detail.second;
         }
-        file << "\"" << details_str << "\"\n";
+        file << csv(details_str) << "\n";
     }
     
     file.close();
@@ -237,16 +255,18 @@ bool ReportGenerator::GenerateHTML(const String& filename) {
             case SecurityLevel::Low: risk_class = L"low"; risk_str = L"Low"; break;
         }
         
+        // risk_class/risk_str are fixed literals from the switch above and are
+        // safe; everything else is untrusted and must be escaped.
         html << L"<div class=\"finding " << risk_class << L"\">\n";
-        html << L"<h3>" << result.module_name << L" - " << result.item_name << L"</h3>\n";
+        html << L"<h3>" << H(result.module_name) << L" - " << H(result.item_name) << L"</h3>\n";
         html << L"<p><strong>Risk:</strong> <span class=\"risk-" << risk_class << L"\">" << risk_str << L"</span></p>\n";
-        html << L"<p>" << result.description << L"</p>\n";
-        
+        html << L"<p>" << H(result.description) << L"</p>\n";
+
         if (!result.details.empty()) {
             html << L"<div class=\"details\">\n";
             html << L"<strong>Details:</strong><br>\n";
             for (const auto& detail : result.details) {
-                html << L"<strong>" << detail.first << L":</strong> " << detail.second << L"<br>\n";
+                html << L"<strong>" << H(detail.first) << L":</strong> " << H(detail.second) << L"<br>\n";
             }
             html << L"</div>\n";
         }

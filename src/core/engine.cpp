@@ -306,7 +306,7 @@ bool ScanEngine::ExportResults(const String& format, const String& filename) {
     sys_info.os_version = Core::Utils::GetWindowsVersion();
     sys_info.architecture = Core::Utils::IsWow64Process() ? L"x86" : L"x64";
     sys_info.scan_time = std::chrono::system_clock::now();
-    sys_info.sysrecon_version = L"1.0.0";
+    sys_info.sysrecon_version = SYSRECON_VERSION;
     report_generator_->SetSystemInfo(sys_info);
     
     if (format == L"json") {

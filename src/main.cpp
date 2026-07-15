@@ -41,7 +41,7 @@ void PrintBanner() {
     std::wcout << L"███████║   ██║   ███████║██║  ██║███████╗╚██████╗╚██████╔╝██║ ╚████║\n";
     std::wcout << L"╚══════╝   ╚═╝   ╚══════╝╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚═════╝ ╚═╝  ╚═══╝\n";
     std::wcout << L"\n";
-    std::wcout << L"Windows Security Audit & Reconnaissance Tool v1.1.0\n";
+    std::wcout << L"Windows Security Audit & Reconnaissance Tool v" << SYSRECON_VERSION << L"\n";
     std::wcout << L"Copyright (C) 2025 - XpertLambda\n";
     std::wcout << L"═══════════════════════════════════════════════════════════════════════\n\n";
 }
@@ -87,7 +87,7 @@ void PrintHelp() {
 
 void PrintVersion() {
     PrintBanner();
-    std::wcout << L"Version:      1.1.0\n";
+    std::wcout << L"Version:      " << SYSRECON_VERSION << L"\n";
     std::wcout << L"Build Date:   " << __DATE__ << L" " << __TIME__ << L"\n";
     std::wcout << L"Target:       Windows x64\n";
     std::wcout << L"Compiler:     MinGW-w64 (C++20)\n";
@@ -100,33 +100,53 @@ void PrintVersion() {
     std::wcout << L"\n";
 }
 
+// True if a standard handle points at a file or pipe rather than a console.
+// Redirected output must never be reattached to a console.
+bool StdHandleIsRedirected(DWORD std_handle) {
+    HANDLE handle = GetStdHandle(std_handle);
+    if (handle == NULL || handle == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    DWORD mode = 0;
+    // GetConsoleMode succeeds only for real console handles.
+    return GetConsoleMode(handle, &mode) == 0;
+}
+
 // Interactive menu functions
 void ClearScreen() {
-    system("cls");
+    // Deliberately not system("cls"): that spawns cmd.exe on every redraw,
+    // which resolves through PATH/%COMSPEC% and is a hijack surface when
+    // running elevated. VT is enabled in wmain.
+    std::wcout << L"\033[2J\033[H";
+    std::wcout.flush();
 }
 
 void WaitForKey() {
     std::wcout << L"\nPress any key to continue...";
     std::wcout.flush();
-    
-    // Use Windows API instead of _getch()
+
     HANDLE hStdin = GetStdHandle(STD_INPUT_HANDLE);
-    DWORD mode;
-    GetConsoleMode(hStdin, &mode);
+    DWORD mode = 0;
+
+    // With redirected or invalid stdin there is no key to wait for. Returning
+    // matters: WaitForKey is called from the fatal-error path, and spinning
+    // here would hang the process instead of reporting the failure.
+    if (hStdin == NULL || hStdin == INVALID_HANDLE_VALUE || !GetConsoleMode(hStdin, &mode)) {
+        std::wcout << L"\n";
+        return;
+    }
+
     SetConsoleMode(hStdin, mode & ~(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT));
-    
+
     INPUT_RECORD inputRecord;
-    DWORD events;
-    
-    // Wait for a key press
-    while (true) {
-        ReadConsoleInput(hStdin, &inputRecord, 1, &events);
-        if (inputRecord.EventType == KEY_EVENT && inputRecord.Event.KeyEvent.bKeyDown) {
+    DWORD events = 0;
+    while (ReadConsoleInput(hStdin, &inputRecord, 1, &events)) {
+        if (events > 0 && inputRecord.EventType == KEY_EVENT &&
+            inputRecord.Event.KeyEvent.bKeyDown) {
             break;
         }
     }
-    
-    // Restore console mode
+
     SetConsoleMode(hStdin, mode);
     std::wcout << L"\n";
 }
@@ -864,24 +884,30 @@ int main() {
 
 int wmain(int argc, wchar_t* argv[]) {
     try {
-        // Check if we already have a console attached
-        HWND consoleWindow = GetConsoleWindow();
-        
-        // Only allocate a new console if we don't have one
-        if (consoleWindow == NULL) {
-            if (!AllocConsole()) {
-                // If AllocConsole fails, we might already have one
-                // This is not a critical error, continue
+        // Console attachment.
+        //
+        // Do NOT reopen the standard streams onto CONOUT$ when they are already
+        // valid: if stdout is a file or a pipe (sysrecon.exe --scan > out.txt),
+        // GetConsoleWindow() still returns NULL, and reopening would silently
+        // redirect every byte of output to an invisible console -- leaving the
+        // analyst with an empty file. Redirection must always win.
+        if (GetConsoleWindow() == NULL && !StdHandleIsRedirected(STD_OUTPUT_HANDLE)) {
+            // Prefer the parent's console (launched from an existing cmd.exe);
+            // only allocate a fresh one if there is genuinely none to attach to.
+            if (!AttachConsole(ATTACH_PARENT_PROCESS)) {
+                AllocConsole();
             }
-            
-            // Reopen standard streams only if we just created a console
-            FILE* fpStdout = nullptr;
-            FILE* fpStderr = nullptr;
-            FILE* fpStdin = nullptr;
-            
-            freopen_s(&fpStdout, "CONOUT$", "w", stdout);
-            freopen_s(&fpStderr, "CONOUT$", "w", stderr);
-            freopen_s(&fpStdin, "CONIN$", "r", stdin);
+
+            FILE* fp = nullptr;
+            if (!StdHandleIsRedirected(STD_OUTPUT_HANDLE)) {
+                freopen_s(&fp, "CONOUT$", "w", stdout);
+            }
+            if (!StdHandleIsRedirected(STD_ERROR_HANDLE)) {
+                freopen_s(&fp, "CONOUT$", "w", stderr);
+            }
+            if (!StdHandleIsRedirected(STD_INPUT_HANDLE)) {
+                freopen_s(&fp, "CONIN$", "r", stdin);
+            }
         }
         
         // Initialize console for Unicode output

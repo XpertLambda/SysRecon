@@ -7,7 +7,34 @@
 namespace SysRecon {
 namespace Modules {
 
-MemoryAnalyzer::MemoryAnalyzer() 
+namespace {
+
+// Resolves the full image path for a PID. Whitelist decisions must never be
+// made on a process name alone -- an implant can call itself csrss.exe.
+// Returns an empty string on failure, which callers treat as "not verified".
+String GetProcessImagePath(DWORD process_id) {
+#ifdef _WIN32
+    HANDLE hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, process_id);
+    if (hProcess == NULL) {
+        return String();
+    }
+    WCHAR buffer[MAX_PATH] = {0};
+    DWORD size = MAX_PATH;
+    String path;
+    if (QueryFullProcessImageNameW(hProcess, 0, buffer, &size)) {
+        path.assign(buffer, size);
+    }
+    CloseHandle(hProcess);
+    return path;
+#else
+    (void)process_id;
+    return String();
+#endif
+}
+
+}  // namespace
+
+MemoryAnalyzer::MemoryAnalyzer()
     : create_dumps_(false)
     , analyze_heap_(false)
     , scan_for_malware_(true)
@@ -57,6 +84,7 @@ bool MemoryAnalyzer::AnalyzeProcessMemory(DWORD process_id) {
     if (GetModuleBaseNameW(hProcess, NULL, process_name, MAX_PATH)) {
         memory_info.process_name = process_name;
     }
+    memory_info.image_path = GetProcessImagePath(process_id);
     
     // Get memory statistics
     PROCESS_MEMORY_COUNTERS_EX pmc = {0};
@@ -76,7 +104,8 @@ bool MemoryAnalyzer::AnalyzeProcessMemory(DWORD process_id) {
     for (const auto& region : memory_info.regions) {
         if (region.is_executable && region.is_writable) {
             // Check if this is a system process before flagging RWX regions
-            bool is_system = Core::SystemWhitelist::Instance().IsSystemProcess(memory_info.process_name);
+            bool is_system = Core::SystemWhitelist::Instance()
+                                 .IsSystemProcess(memory_info.process_name, memory_info.image_path);
             
             // Only flag RWX regions as high risk for non-system processes
             // or if the region is unusually large
@@ -252,19 +281,20 @@ bool MemoryAnalyzer::DetectInjection() {
     
     if (Process32FirstW(hSnapshot, &pe32)) {
         do {
-            // Skip system processes to reduce false positives
+            // Skip verified system processes to reduce false positives. The
+            // whitelist is consulted BEFORE the address-space walk: that walk is
+            // expensive, and running it against lsass.exe only to discard the
+            // result is the canonical credential-dumping signature.
             String proc_name = pe32.szExeFile;
-            bool is_system = Core::SystemWhitelist::Instance().IsSystemProcess(proc_name);
-            
-            // Check for DLL injection (but be more careful with system processes)
+            String proc_path = GetProcessImagePath(pe32.th32ProcessID);
+            bool is_system = Core::SystemWhitelist::Instance()
+                                 .IsSystemProcess(proc_name, proc_path);
+            if (is_system) {
+                continue;
+            }
+
             if (DetectDllInjection(pe32.th32ProcessID)) {
-                // Additional validation for system processes
-                if (is_system) {
-                    // System processes often have private executable memory for JIT, etc.
-                    // Only flag if it's truly suspicious
-                    continue;
-                }
-                
+
                 InjectionIndicator indicator;
                 indicator.type = L"Possible DLL Injection";
                 indicator.description = L"Suspicious unbacked executable memory in process: " + String(pe32.szExeFile);

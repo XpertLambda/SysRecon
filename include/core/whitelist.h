@@ -1,51 +1,66 @@
 #pragma once
 
 #include "../sysrecon.h"
+#include "text_utils.h"
 #include <set>
 #include <algorithm>
 
 namespace SysRecon {
 namespace Core {
 
+// Suppression rules for known-good system components.
+//
+// Design rule: a name alone must NEVER be enough to suppress a finding. Every
+// name in these lists is trivially attacker-chosen -- a service display name, a
+// registry Run value name, an implant renamed to csrss.exe. Suppression
+// therefore always requires corroborating evidence that the referenced image
+// actually lives in a system directory (MITRE T1036.005, masquerading).
 class SystemWhitelist {
 public:
     static SystemWhitelist& Instance() {
         static SystemWhitelist instance;
         return instance;
     }
-    
-    // Check if a process is a known Windows system process
-    bool IsSystemProcess(const String& process_name) const;
-    
-    // Check if a path is in a trusted system directory
+
+    // True only if the name is a known system process AND the image it runs
+    // from is inside a system directory. An `svchost.exe` in %TEMP% is not a
+    // system process. An empty image_path is treated as unverified -> false.
+    bool IsSystemProcess(const String& process_name, const String& image_path) const;
+    bool IsSystemService(const String& service_name, const String& image_path) const;
+    bool IsSystemDll(const String& dll_name, const String& image_path) const;
+
+    // True if `path` resolves inside a trusted system directory. Respects path
+    // boundaries: "C:\WindowsUpdate\evil.exe" is NOT under "C:\Windows".
     bool IsSystemPath(const String& path) const;
-    
-    // Check if a service is a known Windows service
-    bool IsSystemService(const String& service_name) const;
-    
-    // Check if a DLL is a known system DLL
-    bool IsSystemDll(const String& dll_name) const;
-    
-    // Check if a registry key is a known persistence location
-    bool IsKnownPersistenceKey(const String& key_path) const;
-    
-    // Check if unquoted path is actually safe
-    bool IsSafeUnquotedPath(const String& path) const;
-    
+
+    // True only for an exact (case-insensitive) name match whose referenced
+    // image also lives under a system path. Substring matching is deliberately
+    // not used: it let a Run entry named "OneDrive Updater" suppress itself.
+    bool IsKnownPersistenceEntry(const String& entry_name, const String& image_path) const;
+
+    // Implements the actual unquoted-service-path rule: a raw ImagePath is safe
+    // if it is quoted, or if the executable token contains no space. Anything
+    // else is hijackable (e.g. C:\Program Files\X\y.exe -> C:\Program.exe).
+    bool IsSafeUnquotedPath(const String& image_path) const;
+
+    // Operator-supplied known-good entries, so real deployments are not forced
+    // to choose between drowning in false positives and patching the binary.
+    void AddTrustedPath(const String& path);
+    void AddTrustedServiceName(const String& service_name);
+
 private:
     SystemWhitelist();
-    
+
+    bool IsKnownName(const std::set<String>& names, const String& name) const;
+
     std::set<String> system_processes_;
     std::set<String> system_services_;
     std::set<String> system_dlls_;
     std::set<String> system_paths_;
-    std::set<String> known_persistence_keys_;
-    std::set<String> safe_unquoted_paths_;
+    std::set<String> known_persistence_names_;
 };
 
-// Inline implementation
 inline SystemWhitelist::SystemWhitelist() {
-    // Common Windows system processes
     system_processes_ = {
         L"system", L"smss.exe", L"csrss.exe", L"wininit.exe", L"winlogon.exe",
         L"services.exe", L"lsass.exe", L"svchost.exe", L"explorer.exe",
@@ -58,20 +73,18 @@ inline SystemWhitelist::SystemWhitelist() {
         L"securityhealthsystray.exe", L"msmpeng.exe", L"nissrv.exe",
         L"sgrmbroker.exe", L"searchprotocolhost.exe", L"searchfilterhost.exe"
     };
-    
-    // Common Windows services
+
     system_services_ = {
         L"wuauserv", L"bits", L"eventlog", L"schedule", L"winmgmt",
         L"lanmanserver", L"lanmanworkstation", L"dnscache", L"dhcp",
         L"nsi", L"nlasvc", L"mpssvc", L"wscsvc", L"windefend",
         L"securityhealthservice", L"sense", L"diagtrack", L"dmwappushservice",
         L"spooler", L"stisvc", L"themes", L"audiosrv", L"cryptsvc",
-        L"dcomlaunch", L"eventlog", L"gpsvc", L"profiler", L"rpcss",
+        L"dcomlaunch", L"gpsvc", L"profiler", L"rpcss",
         L"samss", L"shellhwdetection", L"sysmain", L"tokenbroker",
-        L"usosvc", L"wersvc", L"wlidsvc", L"wsearch", L"wuauserv"
+        L"usosvc", L"wersvc", L"wlidsvc", L"wsearch"
     };
-    
-    // Common system DLLs
+
     system_dlls_ = {
         L"ntdll.dll", L"kernel32.dll", L"kernelbase.dll", L"user32.dll",
         L"gdi32.dll", L"advapi32.dll", L"ole32.dll", L"oleaut32.dll",
@@ -80,8 +93,7 @@ inline SystemWhitelist::SystemWhitelist() {
         L"ucrtbase.dll", L"bcrypt.dll", L"crypt32.dll", L"sechost.dll",
         L"rpcrt4.dll", L"imm32.dll", L"msctf.dll", L"clbcatq.dll"
     };
-    
-    // System paths (case-insensitive comparison)
+
     system_paths_ = {
         L"c:\\windows\\system32",
         L"c:\\windows\\syswow64",
@@ -89,83 +101,80 @@ inline SystemWhitelist::SystemWhitelist() {
         L"c:\\program files\\windows defender",
         L"c:\\program files (x86)\\windows defender"
     };
-    
-    // Known persistence keys (legitimate)
-    known_persistence_keys_ = {
-        L"Windows Defender",
-        L"SecurityHealth",
-        L"OneDrive",
-        L"Microsoft Edge Update",
-        L"Windows Security"
-    };
-    
-    // Safe unquoted paths (these are in root directories without spaces)
-    safe_unquoted_paths_ = {
-        L"c:\\windows\\",
-        L"c:\\program files\\windows"
+
+    known_persistence_names_ = {
+        L"windows defender",
+        L"securityhealth",
+        L"onedrive",
+        L"microsoft edge update",
+        L"windows security"
     };
 }
 
-inline bool SystemWhitelist::IsSystemProcess(const String& process_name) const {
-    String lower_name = process_name;
-    std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(), ::towlower);
-    return system_processes_.find(lower_name) != system_processes_.end();
+inline bool SystemWhitelist::IsKnownName(const std::set<String>& names, const String& name) const {
+    return names.find(Text::ToLowerAscii(name)) != names.end();
 }
 
 inline bool SystemWhitelist::IsSystemPath(const String& path) const {
-    String lower_path = path;
-    std::transform(lower_path.begin(), lower_path.end(), lower_path.begin(), ::towlower);
-    
+    if (path.empty()) {
+        return false;
+    }
     for (const auto& sys_path : system_paths_) {
-        if (lower_path.find(sys_path) == 0) {
+        if (Text::IsPathUnder(path, sys_path)) {
             return true;
         }
     }
     return false;
 }
 
-inline bool SystemWhitelist::IsSystemService(const String& service_name) const {
-    String lower_name = service_name;
-    std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(), ::towlower);
-    return system_services_.find(lower_name) != system_services_.end();
+inline bool SystemWhitelist::IsSystemProcess(const String& process_name, const String& image_path) const {
+    return IsKnownName(system_processes_, process_name) && IsSystemPath(image_path);
 }
 
-inline bool SystemWhitelist::IsSystemDll(const String& dll_name) const {
-    String lower_name = dll_name;
-    std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(), ::towlower);
-    return system_dlls_.find(lower_name) != system_dlls_.end();
+inline bool SystemWhitelist::IsSystemService(const String& service_name, const String& image_path) const {
+    return IsKnownName(system_services_, service_name) && IsSystemPath(image_path);
 }
 
-inline bool SystemWhitelist::IsKnownPersistenceKey(const String& key_path) const {
-    for (const auto& known : known_persistence_keys_) {
-        if (key_path.find(known) != String::npos) {
-            return true;
-        }
-    }
-    return false;
+inline bool SystemWhitelist::IsSystemDll(const String& dll_name, const String& image_path) const {
+    return IsKnownName(system_dlls_, dll_name) && IsSystemPath(image_path);
 }
 
-inline bool SystemWhitelist::IsSafeUnquotedPath(const String& path) const {
-    String lower_path = path;
-    std::transform(lower_path.begin(), lower_path.end(), lower_path.begin(), ::towlower);
-    
-    // Check if it's a safe system path
-    for (const auto& safe_path : safe_unquoted_paths_) {
-        if (lower_path.find(safe_path) == 0) {
-            return true;
-        }
+inline bool SystemWhitelist::IsKnownPersistenceEntry(const String& entry_name, const String& image_path) const {
+    return IsKnownName(known_persistence_names_, entry_name) && IsSystemPath(image_path);
+}
+
+inline bool SystemWhitelist::IsSafeUnquotedPath(const String& image_path) const {
+    String path = image_path;
+
+    size_t first = path.find_first_not_of(L" \t");
+    if (first == String::npos) {
+        return true;  // Nothing to hijack.
     }
-    
-    // If path has no spaces before the executable, it's safe
-    size_t exe_pos = lower_path.find(L".exe");
-    if (exe_pos != String::npos) {
-        String path_before_exe = lower_path.substr(0, exe_pos);
-        if (path_before_exe.find(L' ') == String::npos) {
-            return true;
-        }
+    path = path.substr(first);
+
+    // A quoted image path cannot be hijacked -- the shell will not split it.
+    if (path.front() == L'"') {
+        return true;
     }
-    
-    return false;
+
+    // Unquoted: everything up to the first space is what Windows will execute
+    // first. If that token is itself the full executable, there is no ambiguity.
+    size_t space = path.find(L' ');
+    if (space == String::npos) {
+        return true;  // No spaces anywhere.
+    }
+
+    const String first_token = Text::ToLowerAscii(path.substr(0, space));
+    return first_token.size() >= 4 &&
+           first_token.compare(first_token.size() - 4, 4, L".exe") == 0;
+}
+
+inline void SystemWhitelist::AddTrustedPath(const String& path) {
+    system_paths_.insert(Text::ToLowerAscii(path));
+}
+
+inline void SystemWhitelist::AddTrustedServiceName(const String& service_name) {
+    system_services_.insert(Text::ToLowerAscii(service_name));
 }
 
 }

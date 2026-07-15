@@ -33,106 +33,94 @@ bool RegistryAnalyzer::AnalyzeStartupKeys() {
         L"SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Run",
         L"SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\RunOnce"
     };
-    
-    // Check HKLM keys
-    for (const auto& key_path : startup_keys) {
-        HKEY hKey;
-        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, key_path.c_str(), 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+
+    // Re-enumeration must not append to prior results (interactive mode runs
+    // this more than once).
+    startup_entries_.clear();
+
+    // HKCU Run keys are the most common persistence location, so both hives are
+    // scanned through the same path -- including the same whitelist checks.
+    const struct { HKEY root; const wchar_t* label; } hives[] = {
+        { HKEY_LOCAL_MACHINE, L"HKLM\\" },
+        { HKEY_CURRENT_USER,  L"HKCU\\" }
+    };
+
+    for (const auto& hive : hives) {
+        for (const auto& key_path : startup_keys) {
+            HKEY hKey;
+            if (RegOpenKeyExW(hive.root, key_path.c_str(), 0, KEY_READ, &hKey) != ERROR_SUCCESS) {
+                continue;
+            }
+
             DWORD index = 0;
             wchar_t valueName[16384];
-            DWORD valueNameSize;
             wchar_t valueData[16384];
-            DWORD valueDataSize;
-            DWORD valueType;
-            
+
             while (true) {
-                valueNameSize = sizeof(valueName) / sizeof(valueName[0]);
-                valueDataSize = sizeof(valueData);
-                
-                LONG result = RegEnumValueW(hKey, index, valueName, &valueNameSize, 
+                DWORD valueNameSize = sizeof(valueName) / sizeof(valueName[0]);
+                DWORD valueDataSize = sizeof(valueData);
+                DWORD valueType = 0;
+
+                LONG result = RegEnumValueW(hKey, index, valueName, &valueNameSize,
                                            nullptr, &valueType, (LPBYTE)valueData, &valueDataSize);
-                
-                if (result == ERROR_SUCCESS) {
-                    StartupEntry entry;
-                    entry.name = String(valueName);
-                    entry.command = String(valueData, valueDataSize / sizeof(wchar_t) - 1);
-                    entry.location = L"HKLM\\" + key_path;
-                    entry.is_enabled = true;
-                    entry.is_signed = false;
-                    
-                    // Check if this is a known legitimate startup entry
-                    bool is_known = Core::SystemWhitelist::Instance().IsKnownPersistenceKey(entry.name);
-                    bool is_system_path = Core::SystemWhitelist::Instance().IsSystemPath(entry.command);
-                    
-                    // Assign risk level based on analysis
-                    if (is_known || is_system_path) {
-                        entry.risk_level = SecurityLevel::Low;
-                    } else {
-                        entry.risk_level = SecurityLevel::Medium;
-                    }
-                    
-                    startup_entries_.push_back(entry);
-                    
-                    // Only create scan result for non-system entries or medium+ risk
-                    if (!is_known && !is_system_path) {
-                        ScanResult scan_result;
-                        scan_result.module_name = L"Registry";
-                        scan_result.item_name = entry.name;
-                        scan_result.description = L"Startup entry in: " + entry.location;
-                        scan_result.details[L"Command"] = entry.command;
-                        scan_result.details[L"Location"] = entry.location;
-                        scan_result.details[L"Note"] = is_known ? L"Known system component" : L"Third-party startup entry";
-                        scan_result.risk_level = entry.risk_level;
-                        scan_result.timestamp = std::chrono::system_clock::now();
-                        scan_results_.push_back(scan_result);
-                    }
-                    
-                    index++;
-                } else {
+                if (result != ERROR_SUCCESS) {
                     break;
+                }
+                index++;
+
+                // Registry values are attacker-controlled: a Run value may hold
+                // any type and is not guaranteed to be NUL-terminated. Skip
+                // anything that is not a string rather than reinterpreting it.
+                if (valueType != REG_SZ && valueType != REG_EXPAND_SZ) {
+                    continue;
+                }
+                if (valueDataSize < sizeof(wchar_t)) {
+                    continue;
+                }
+
+                size_t chars = valueDataSize / sizeof(wchar_t);
+                // Trim the terminator only if one is actually present.
+                if (valueData[chars - 1] == L'\0') {
+                    chars--;
+                }
+
+                StartupEntry entry;
+                entry.name = String(valueName, valueNameSize);
+                entry.command = String(valueData, chars);
+                entry.location = String(hive.label) + key_path;
+                entry.is_enabled = true;
+                entry.is_signed = false;
+
+                // Suppression requires the referenced image to actually live in
+                // a system directory -- a trusted-looking name is not evidence.
+                const String image_path = Core::Text::ExtractExecutablePath(entry.command);
+                const bool is_known = Core::SystemWhitelist::Instance()
+                                          .IsKnownPersistenceEntry(entry.name, image_path);
+                const bool is_system_path = Core::SystemWhitelist::Instance()
+                                          .IsSystemPath(image_path);
+
+                entry.risk_level = (is_known || is_system_path) ? SecurityLevel::Low
+                                                                : SecurityLevel::Medium;
+                startup_entries_.push_back(entry);
+
+                if (!is_known && !is_system_path) {
+                    ScanResult scan_result;
+                    scan_result.module_name = L"Registry";
+                    scan_result.item_name = entry.name;
+                    scan_result.description = L"Startup entry in: " + entry.location;
+                    scan_result.details[L"Command"] = entry.command;
+                    scan_result.details[L"Location"] = entry.location;
+                    scan_result.details[L"Image Path"] = image_path.empty() ? L"(unresolved)" : image_path;
+                    scan_result.details[L"Note"] = L"Third-party startup entry";
+                    scan_result.risk_level = entry.risk_level;
+                    scan_result.timestamp = std::chrono::system_clock::now();
+                    scan_results_.push_back(scan_result);
                 }
             }
             RegCloseKey(hKey);
         }
     }
-    
-    // Check HKCU keys
-    for (const auto& key_path : startup_keys) {
-        HKEY hKey;
-        if (RegOpenKeyExW(HKEY_CURRENT_USER, key_path.c_str(), 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
-            DWORD index = 0;
-            wchar_t valueName[16384];
-            DWORD valueNameSize;
-            wchar_t valueData[16384];
-            DWORD valueDataSize;
-            DWORD valueType;
-            
-            while (true) {
-                valueNameSize = sizeof(valueName) / sizeof(valueName[0]);
-                valueDataSize = sizeof(valueData);
-                
-                LONG result = RegEnumValueW(hKey, index, valueName, &valueNameSize, 
-                                           nullptr, &valueType, (LPBYTE)valueData, &valueDataSize);
-                
-                if (result == ERROR_SUCCESS) {
-                    StartupEntry entry;
-                    entry.name = String(valueName);
-                    entry.command = String(valueData, valueDataSize / sizeof(wchar_t) - 1);
-                    entry.location = L"HKCU\\" + key_path;
-                    entry.is_enabled = true;
-                    entry.is_signed = false;
-                    entry.risk_level = SecurityLevel::Medium;
-                    
-                    startup_entries_.push_back(entry);
-                    index++;
-                } else {
-                    break;
-                }
-            }
-            RegCloseKey(hKey);
-        }
-    }
-    
+
     SYSRECON_LOG_INFO(L"Found " + std::to_wstring(startup_entries_.size()) + L" startup entries");
     return true;
 #else

@@ -24,6 +24,9 @@ struct MemoryRegion {
 struct ProcessMemoryInfo {
     DWORD process_id;
     String process_name;
+    // Full path to the running image. Required to tell a genuine
+    // C:\Windows\System32\svchost.exe from an implant of the same name.
+    String image_path;
     SIZE_T working_set;
     SIZE_T page_file_usage;
     SIZE_T virtual_size;

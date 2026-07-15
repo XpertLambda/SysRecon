@@ -52,18 +52,6 @@ bool IsValidIpAddress(const String& ip_str);
 bool IsPrivateIpAddress(const String& ip_str);
 String MacAddressToString(const uint8_t* mac);
 
-String Base64Encode(const ByteVector& data);
-ByteVector Base64Decode(const String& encoded);
-String HexEncode(const ByteVector& data);
-ByteVector HexDecode(const String& hex_str);
-String UrlEncode(const String& str);
-String UrlDecode(const String& str);
-
-String CalculateMD5(const String& file_path);
-String CalculateSHA1(const String& file_path);
-String CalculateSHA256(const String& file_path);
-String CalculateHashFromBuffer(const ByteVector& buffer, const String& algorithm);
-
 #ifdef _WIN32
 String RegistryKeyToString(HKEY key);
 bool RegistryKeyExists(HKEY root, const String& subkey);
@@ -74,15 +62,8 @@ StringVector EnumerateRegistrySubkeys(HKEY root, const String& subkey);
 StringVector EnumerateRegistryValues(HKEY root, const String& subkey);
 #endif
 
-String GenerateRandomString(size_t length);
-ByteVector GenerateRandomBytes(size_t length);
-String HashPassword(const String& password, const String& salt);
-bool VerifyPassword(const String& password, const String& hash, const String& salt);
-
 String FormatTimestamp(const std::chrono::system_clock::time_point& time, const String& format = L"%Y-%m-%d %H:%M:%S");
-std::chrono::system_clock::time_point ParseTimestamp(const String& timestamp, const String& format = L"%Y-%m-%d %H:%M:%S");
 String GetCurrentTimestamp();
-String GetUptime();
 
 class Timer {
 public:
@@ -101,25 +82,6 @@ private:
 };
 
 String FormatBytes(size_t bytes);
-size_t GetAvailableMemory();
-size_t GetTotalMemory();
-double GetMemoryUsagePercentage();
-
-struct ProcessInfo {
-    DWORD pid;
-    String name;
-    String path;
-    String command_line;
-    DWORD parent_pid;
-    std::chrono::system_clock::time_point creation_time;
-    size_t memory_usage;
-    double cpu_usage;
-};
-
-StringVector GetRunningProcesses();
-ProcessInfo GetProcessInfo(DWORD pid);
-bool TerminateProcess(DWORD pid);
-bool IsProcessRunning(const String& process_name);
 
 }
 }

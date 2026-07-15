@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  unit-tests:
+    name: Unit tests (native)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential
+
+      - name: Configure
+        run: cmake -S . -B build-tests -DCMAKE_BUILD_TYPE=Release -DSYSRECON_BUILD_TESTS=ON
+
+      - name: Build tests
+        run: cmake --build build-tests --target sysrecon_tests -j$(nproc)
+
+      - name: Run tests
+        working-directory: build-tests
+        run: ctest --output-on-failure
+
+  cross-compile:
+    name: Cross-compile for Windows (MinGW-w64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install MinGW-w64
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mingw-w64 cmake build-essential
+
+      - name: Configure
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-w64-x86_64.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSYSRECON_BUILD_TESTS=OFF
+
+      - name: Build
+        run: cmake --build build -j$(nproc)
+
+      - name: Verify artifact
+        run: test -f build/sysrecon.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sysrecon-exe
+          path: build/sysrecon.exe
+
+  smoke-test:
+    name: Smoke test under wine
+    runs-on: ubuntu-latest
+    needs: cross-compile
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: sysrecon-exe
+          path: build
+
+      - name: Install wine
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y wine64
+
+      - name: Output must survive redirection
+        env:
+          WINEDEBUG: "-all"
+        run: |
+          chmod +x build/sysrecon.exe
+          wine build/sysrecon.exe --help > help.txt 2>/dev/null || true
+          # Regression guard: AllocConsole used to reattach stdout to an
+          # invisible console, so every redirected run produced an empty file.
+          if [ ! -s help.txt ]; then
+            echo "FAIL: --help produced no output when redirected"
+            exit 1
+          fi
+          echo "OK: captured $(wc -c < help.txt) bytes"

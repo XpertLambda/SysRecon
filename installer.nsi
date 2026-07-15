@@ -24,7 +24,7 @@
 
 ; Application Information
 !define PRODUCT_NAME "SysRecon"
-!define PRODUCT_VERSION "1.0.0"
+!define PRODUCT_VERSION "1.1.0"
 !define PRODUCT_PUBLISHER "XpertLambda"
 !define PRODUCT_WEB_SITE "https://github.com/XpertLambda/SysRecon"
 !define PRODUCT_DESCRIPTION "Windows Security Audit & Reconnaissance Tool"
@@ -145,8 +145,9 @@ Section "Core Files" SecCore
   SetOutPath "$INSTDIR"
   SetOverwrite on
   
-  ; Main executable
-  File "build\sysrecon.exe"
+  ; Main executable. Forward slashes: makensis on POSIX (build-installer.sh)
+  ; does not treat "\" as a path separator, and NSIS on Windows accepts "/".
+  File "build/sysrecon.exe"
   
   ; Configuration file
   File "config.json"

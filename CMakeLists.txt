@@ -1,29 +1,32 @@
 cmake_minimum_required(VERSION 3.20)
-project(SysRecon VERSION 1.0.0 LANGUAGES CXX)
+project(SysRecon VERSION 1.1.0 LANGUAGES CXX)
 
 # Set C++ standard
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Enable cross-compilation for Windows from Linux
-if(WIN32)
-    set(CMAKE_SYSTEM_NAME Windows)
-    set(CMAKE_C_COMPILER x86_64-w64-mingw32-gcc)
-    set(CMAKE_CXX_COMPILER x86_64-w64-mingw32-g++)
-    set(CMAKE_RC_COMPILER x86_64-w64-mingw32-windres)
-    set(CMAKE_FIND_ROOT_PATH /usr/x86_64-w64-mingw32)
-    set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
-    set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
-    set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
-endif()
+# Cross-compiling for Windows is driven by cmake/mingw-w64-x86_64.cmake.
+# Toolchain variables must be set in that file, not here -- setting them after
+# project() has no effect.
+
+option(SYSRECON_BUILD_TESTS "Build the unit test suite" ON)
+option(SYSRECON_WERROR "Treat compiler warnings as errors" OFF)
 
 # Compiler flags
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     add_compile_options(-Wall -Wextra -Wpedantic)
+    if(SYSRECON_WERROR)
+        add_compile_options(-Werror)
+    endif()
     if(CMAKE_BUILD_TYPE STREQUAL "Debug")
         add_compile_options(-g -O0)
     else()
         add_compile_options(-O3 -DNDEBUG)
+    endif()
+elseif(MSVC)
+    add_compile_options(/W4 /utf-8)
+    if(SYSRECON_WERROR)
+        add_compile_options(/WX)
     endif()
 endif()
 
@@ -32,16 +35,37 @@ if(WIN32)
     add_definitions(-DUNICODE -D_UNICODE)
     add_definitions(-DWIN32_LEAN_AND_MEAN)
     add_definitions(-DNOMINMAX)
-    # Use console subsystem
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -mconsole")
+    # -mconsole is a MinGW/GCC flag; MSVC's link.exe rejects it.
+    if(MINGW)
+        set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -mconsole")
+    else()
+        set_property(GLOBAL PROPERTY WIN32_EXECUTABLE OFF)
+    endif()
 endif()
 
-# Include directories
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/modules)
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/external)
+# Single source of truth for the version, consumed by sysrecon.h.
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/cmake/version.h.in
+    ${CMAKE_CURRENT_BINARY_DIR}/generated/sysrecon_version.h
+    @ONLY
+)
 
-# Source files
+# ---------------------------------------------------------------------------
+# sysrecon_core: platform-independent logic, compiled natively so it can be
+# unit-tested on any host without wine. Must contain no Win32 dependencies.
+# ---------------------------------------------------------------------------
+add_library(sysrecon_core STATIC
+    src/core/text_utils.cpp
+)
+target_include_directories(sysrecon_core PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/external
+    ${CMAKE_CURRENT_BINARY_DIR}/generated
+)
+
+# ---------------------------------------------------------------------------
+# sysrecon: the Windows executable.
+# ---------------------------------------------------------------------------
 set(SOURCES
     src/main.cpp
     src/core/engine.cpp
@@ -57,13 +81,14 @@ set(SOURCES
     modules/reporting/report_generator.cpp
 )
 
-# Header files
 set(HEADERS
     include/sysrecon.h
     include/core/engine.h
     include/core/logger.h
     include/core/config.h
     include/core/utils.h
+    include/core/text_utils.h
+    include/core/whitelist.h
     include/modules/accounts/user_enum.h
     include/modules/services/service_enum.h
     include/modules/processes/process_enum.h
@@ -73,12 +98,16 @@ set(HEADERS
     include/modules/reporting/report_generator.h
 )
 
-# Create executable
-add_executable(sysrecon ${SOURCES} ${HEADERS})
-
-# Windows libraries
 if(WIN32)
-    target_link_libraries(sysrecon
+    add_executable(sysrecon ${SOURCES} ${HEADERS})
+    target_include_directories(sysrecon PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/modules
+        ${CMAKE_CURRENT_SOURCE_DIR}/external
+        ${CMAKE_CURRENT_BINARY_DIR}/generated
+    )
+    target_link_libraries(sysrecon PRIVATE
+        sysrecon_core
         advapi32    # Registry, security APIs
         kernel32    # Process, memory APIs
         user32      # User APIs
@@ -87,19 +116,50 @@ if(WIN32)
         psapi       # Process status APIs
         iphlpapi    # IP Helper APIs
         ws2_32      # Winsock
-        dbghelp     # Debug help library
-        version     # Version APIs
-        setupapi    # Setup APIs
+        dbghelp     # MiniDumpWriteDump
     )
+    install(TARGETS sysrecon DESTINATION bin)
+else()
+    message(STATUS "Not targeting Windows: building sysrecon_core and tests only.")
 endif()
 
-# Installation
-install(TARGETS sysrecon DESTINATION bin)
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+if(SYSRECON_BUILD_TESTS AND NOT CMAKE_CROSSCOMPILING)
+    enable_testing()
+    find_package(GTest QUIET)
+    if(NOT GTest_FOUND)
+        include(FetchContent)
+        FetchContent_Declare(
+            googletest
+            GIT_REPOSITORY https://github.com/google/googletest.git
+            GIT_TAG v1.14.0
+        )
+        set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+        FetchContent_MakeAvailable(googletest)
+    endif()
 
-# CPack configuration for packaging
-include(CPack)
+    # tests/test_core.cpp is NOT built here yet: it exercises Utils and Logger,
+    # which are still Win32-coupled and live in the sysrecon exe target. It is
+    # wired up once those are split into sysrecon_core (see TESTING.md).
+    add_executable(sysrecon_tests
+        tests/test_whitelist.cpp
+        tests/test_report_escaping.cpp
+    )
+    target_link_libraries(sysrecon_tests PRIVATE sysrecon_core GTest::gtest_main)
+
+    include(GoogleTest)
+    gtest_discover_tests(sysrecon_tests)
+endif()
+
+# ---------------------------------------------------------------------------
+# Packaging. CPack snapshots CPACK_* variables at include() time, so
+# include(CPack) must come last.
+# ---------------------------------------------------------------------------
 set(CPACK_PACKAGE_NAME "SysRecon")
 set(CPACK_PACKAGE_VENDOR "SysRecon Team")
 set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Windows Security Audit Tool")
-set(CPACK_GENERATOR "ZIP;NSIS")
+set(CPACK_GENERATOR "ZIP")
+include(CPack)
