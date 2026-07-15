@@ -75,6 +75,9 @@ private:
     std::unique_ptr<Modules::ReportGenerator> report_generator_;
     
     String output_directory_;
+    // True once a config file has been successfully loaded. Guards settings
+    // whose in-code default would otherwise change behaviour with no config.
+    bool config_loaded_ = false;
     bool verbose_mode_ = false;
     bool stealth_mode_ = false;
     std::map<ModuleType, bool> enabled_modules_;

@@ -5,41 +5,37 @@
 namespace SysRecon {
 namespace Core {
 
+// Only settings this build actually honours are represented here. Options that
+// were parsed, validated and then ignored have been removed rather than left as
+// decoration -- notably max_threads/timeout_seconds (the scan is entirely
+// sequential and enforces no timeout) and the security block, where
+// encrypt_output: true produced an unencrypted report with no warning and
+// encryption_key sat in plaintext in config.json.
 struct ScanConfig {
     // General settings
     bool verbose_output = false;
     bool stealth_mode = false;
     bool require_admin = true;
-    int max_threads = 4;
-    int timeout_seconds = 300;
-    
+
     // Module settings
     struct {
         bool enabled = true;
         bool enumerate_groups = true;
-        bool check_passwords = false;
-        bool analyze_permissions = true;
     } accounts;
-    
+
     struct {
         bool enabled = true;
-        bool analyze_startup = true;
-        bool check_dependencies = true;
-        bool verify_signatures = false;
     } services;
-    
+
     struct {
         bool enabled = true;
-        bool analyze_memory = false;
         bool check_dlls = true;
-        bool detect_injection = true;
     } processes;
     
     struct {
         bool enabled = true;
         bool scan_listening_ports = true;
         bool analyze_connections = true;
-        bool resolve_hostnames = false;
     } network;
     
     struct {
@@ -64,17 +60,7 @@ struct ScanConfig {
         bool generate_json = true;
         bool generate_csv = true;
         bool generate_html = true;
-        bool generate_pdf = false;
-        bool compress_output = true;
     } output;
-    
-    // Security settings
-    struct {
-        bool encrypt_output = false;
-        String encryption_key;
-        bool sign_reports = false;
-        String signing_cert;
-    } security;
 };
 
 class ConfigManager {
@@ -92,8 +78,6 @@ public:
     
     // Specific getters
     bool IsModuleEnabled(ModuleType module) const;
-    int GetMaxThreads() const { return config_.max_threads; }
-    int GetTimeoutSeconds() const { return config_.timeout_seconds; }
     bool IsVerboseMode() const { return config_.verbose_output; }
     bool IsStealthMode() const { return config_.stealth_mode; }
     
@@ -101,9 +85,6 @@ public:
     bool ValidateConfig() const;
     StringVector GetValidationErrors() const;
     
-    // Environment detection
-    bool DetectEnvironment();
-    void ApplyEnvironmentOptimizations();
     
 private:
     ConfigManager() = default;

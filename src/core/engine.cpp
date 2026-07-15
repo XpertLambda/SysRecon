@@ -42,6 +42,8 @@ void ScanEngine::LoadConfig(const String& config_file) {
     }
     SetStealthMode(cfg.stealth_mode);
     SetVerboseMode(cfg.verbose_output);
+
+    config_loaded_ = true;
 }
 
 void ScanEngine::ApplyConfigToModules() {
@@ -109,10 +111,34 @@ bool ScanEngine::IsModuleEnabled(ModuleType module) const {
 
 bool ScanEngine::Initialize() {
     SYSRECON_LOG_INFO(L"Initializing SysRecon scan engine");
-    
-    if (!CheckPrivileges()) {
-        SYSRECON_LOG_WARNING(L"Insufficient privileges detected");
+
+    const bool is_admin = CheckPrivileges();
+    if (!is_admin) {
+        SYSRECON_LOG_WARNING(L"Not running as Administrator: results will be incomplete");
     }
+
+    // require_admin was parsed from config.json and never enforced. It is only
+    // honoured when a config file was actually loaded: the in-code default is
+    // true, so enforcing it unconditionally would abort every non-admin run
+    // even with no config file present.
+    if (config_loaded_ && ConfigManager::Instance().GetConfig().require_admin && !is_admin) {
+        SYSRECON_LOG_ERROR(L"Configuration requires Administrator privileges "
+                           L"(general.require_admin); aborting");
+        return false;
+    }
+
+#ifdef _WIN32
+    // SE_DEBUG_NAME is process-wide and is needed by the process and memory
+    // modules to open other processes. It used to be enabled only as a side
+    // effect of UserEnumerator::Initialize -- the module that needs it least --
+    // so it worked purely because Accounts happened to be constructed first.
+    // Running `--processes` alone left it disabled and silently produced
+    // empty results.
+    if (!Core::Utils::EnableDebugPrivilege()) {
+        SYSRECON_LOG_WARNING(L"Could not enable SeDebugPrivilege: "
+                             L"process and memory inspection will be limited");
+    }
+#endif
     
     if (output_directory_.empty()) {
         output_directory_ = L"./reports";
@@ -141,7 +167,20 @@ bool ScanEngine::RunFullScan() {
     SYSRECON_LOG_INFO(L"Starting full system scan");
     
     try {
-        float step_progress = 100.0f / 6.0f;
+        // Divide progress across the modules that will actually run. The
+        // hardcoded /6 meant a single-module scan stopped at 17% and then
+        // jumped to 100.
+        const ModuleType all_modules[] = {
+            ModuleType::Accounts, ModuleType::Services, ModuleType::Processes,
+            ModuleType::Network,  ModuleType::Registry, ModuleType::Memory
+        };
+        int enabled_count = 0;
+        for (ModuleType m : all_modules) {
+            if (IsModuleEnabled(m)) {
+                enabled_count++;
+            }
+        }
+        float step_progress = enabled_count > 0 ? (100.0f / enabled_count) : 100.0f;
         float current_progress = 0.0f;
         
         if (IsModuleEnabled(ModuleType::Accounts)) {
@@ -355,37 +394,37 @@ bool ScanEngine::ExportResults(const String& format, const String& filename) {
     
     // Collect results from all modules
     if (user_enum_) {
-        auto module_results = user_enum_->GetScanResults();
+        const auto& module_results = user_enum_->GetScanResults();
         scan_results_.insert(scan_results_.end(), module_results.begin(), module_results.end());
         SYSRECON_LOG_DEBUG(L"Collected " + std::to_wstring(module_results.size()) + L" user results");
     }
     
     if (service_enum_) {
-        auto module_results = service_enum_->GetScanResults();
+        const auto& module_results = service_enum_->GetScanResults();
         scan_results_.insert(scan_results_.end(), module_results.begin(), module_results.end());
         SYSRECON_LOG_DEBUG(L"Collected " + std::to_wstring(module_results.size()) + L" service results");
     }
     
     if (process_enum_) {
-        auto module_results = process_enum_->GetScanResults();
+        const auto& module_results = process_enum_->GetScanResults();
         scan_results_.insert(scan_results_.end(), module_results.begin(), module_results.end());
         SYSRECON_LOG_DEBUG(L"Collected " + std::to_wstring(module_results.size()) + L" process results");
     }
     
     if (network_enum_) {
-        auto module_results = network_enum_->GetScanResults();
+        const auto& module_results = network_enum_->GetScanResults();
         scan_results_.insert(scan_results_.end(), module_results.begin(), module_results.end());
         SYSRECON_LOG_DEBUG(L"Collected " + std::to_wstring(module_results.size()) + L" network results");
     }
     
     if (registry_analyzer_) {
-        auto module_results = registry_analyzer_->GetScanResults();
+        const auto& module_results = registry_analyzer_->GetScanResults();
         scan_results_.insert(scan_results_.end(), module_results.begin(), module_results.end());
         SYSRECON_LOG_DEBUG(L"Collected " + std::to_wstring(module_results.size()) + L" registry results");
     }
     
     if (memory_analyzer_) {
-        auto module_results = memory_analyzer_->GetScanResults();
+        const auto& module_results = memory_analyzer_->GetScanResults();
         scan_results_.insert(scan_results_.end(), module_results.begin(), module_results.end());
         SYSRECON_LOG_DEBUG(L"Collected " + std::to_wstring(module_results.size()) + L" memory results");
     }
@@ -409,8 +448,6 @@ bool ScanEngine::ExportResults(const String& format, const String& filename) {
         return report_generator_->GenerateCSV(filename);
     } else if (format == L"html") {
         return report_generator_->GenerateHTML(filename);
-    } else if (format == L"pdf") {
-        return report_generator_->GeneratePDF(filename);
     } else if (format == L"all") {
         // Generate all formats
         String base_name = filename.substr(0, filename.find_last_of(L'.'));

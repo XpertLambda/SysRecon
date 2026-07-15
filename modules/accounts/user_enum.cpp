@@ -20,12 +20,9 @@ bool UserEnumerator::Initialize() {
         return true;
     }
     
-#ifdef _WIN32
-    if (!Core::Utils::EnableDebugPrivilege()) {
-        SYSRECON_LOG_WARNING_CTX(L"UserEnumerator", L"Initialize", L"Failed to enable debug privilege");
-    }
-#endif
-    
+    // SeDebugPrivilege is enabled once by ScanEngine::Initialize; it is
+    // process-wide and this module does not need it.
+
     initialized_ = true;
     return true;
 }

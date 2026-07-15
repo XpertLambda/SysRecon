@@ -50,8 +50,6 @@ bool ReportGenerator::GenerateReport(ReportFormat format, const String& filename
             return GenerateCSV(filename);
         case ReportFormat::HTML:
             return GenerateHTML(filename);
-        case ReportFormat::PDF:
-            return GeneratePDF(filename);
         default:
             SYSRECON_LOG_ERROR(L"Unsupported report format");
             return false;
@@ -114,8 +112,9 @@ bool ReportGenerator::GenerateJSON(const String& filename) {
         j["summary"]["low"] = low_count;
         j["summary"]["total"] = scan_results_.size();
         
-        // Write to file
-        std::ofstream file(Core::Utils::WideToUtf8(filename));
+        // Wide path: narrowing to the ANSI codepage made any non-ASCII output
+        // directory fail to open. std::filesystem::path preserves it.
+        std::ofstream file{std::filesystem::path(filename)};
         if (!file.is_open()) {
             SYSRECON_LOG_ERROR(L"Failed to create report file");
             return false;
@@ -136,7 +135,9 @@ bool ReportGenerator::GenerateJSON(const String& filename) {
 bool ReportGenerator::GenerateCSV(const String& filename) {
     SYSRECON_LOG_INFO(L"Generating CSV report...");
     
-    std::ofstream file(Core::Utils::WideToUtf8(filename));
+    // Wide path: narrowing to the ANSI codepage made any non-ASCII output
+    // directory fail to open. std::filesystem::path preserves it.
+    std::ofstream file{std::filesystem::path(filename)};
     if (!file.is_open()) {
         SYSRECON_LOG_ERROR(L"Failed to create CSV file");
         return false;
@@ -276,7 +277,9 @@ bool ReportGenerator::GenerateHTML(const String& filename) {
     
     html << L"</body>\n</html>\n";
     
-    std::ofstream file(Core::Utils::WideToUtf8(filename));
+    // Wide path: narrowing to the ANSI codepage made any non-ASCII output
+    // directory fail to open. std::filesystem::path preserves it.
+    std::ofstream file{std::filesystem::path(filename)};
     if (!file.is_open()) {
         SYSRECON_LOG_ERROR(L"Failed to create HTML file");
         return false;
@@ -289,55 +292,12 @@ bool ReportGenerator::GenerateHTML(const String& filename) {
     return true;
 }
 
-bool ReportGenerator::GeneratePDF(const String& filename) {
-    SYSRECON_LOG_WARNING(L"PDF generation not yet implemented");
-    return false;
-}
-
-bool ReportGenerator::GenerateXML(const String& filename) {
-    SYSRECON_LOG_INFO(L"Generating XML report...");
-    return false;
-}
-
-bool ReportGenerator::GenerateText(const String& filename) {
-    SYSRECON_LOG_INFO(L"Generating text report...");
-    return false;
-}
-
 bool ReportGenerator::GenerateAllFormats(const String& base_filename) {
     bool success = true;
     success &= GenerateJSON(base_filename + L".json");
     success &= GenerateCSV(base_filename + L".csv");
     success &= GenerateHTML(base_filename + L".html");
     return success;
-}
-
-bool ReportGenerator::GenerateExecutiveSummary() {
-    return true;
-}
-
-bool ReportGenerator::GenerateFindings() {
-    return true;
-}
-
-bool ReportGenerator::GenerateRecommendations() {
-    return true;
-}
-
-bool ReportGenerator::GenerateSystemInfoSection() {
-    return true;
-}
-
-double ReportGenerator::CalculateRiskScore() {
-    return 0.0;
-}
-
-StringVector ReportGenerator::GetTopRisks(size_t count) {
-    return StringVector();
-}
-
-StringVector ReportGenerator::GenerateRecommendationsList() {
-    return StringVector();
 }
 
 }

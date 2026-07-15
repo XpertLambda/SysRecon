@@ -210,9 +210,14 @@ bool EnableDebugPrivilege() {
     tp.Privileges[0].Luid = luid;
     tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
     
-    bool result = AdjustTokenPrivileges(token, FALSE, &tp, sizeof(TOKEN_PRIVILEGES), nullptr, nullptr) != FALSE;
+    // AdjustTokenPrivileges returns TRUE even when it assigned nothing: it
+    // reports ERROR_NOT_ALL_ASSIGNED via GetLastError. Without this check a
+    // non-admin run reported the privilege as successfully enabled, and the
+    // OpenProcess calls that depend on it then failed with no explanation.
+    BOOL adjusted = AdjustTokenPrivileges(token, FALSE, &tp, sizeof(TOKEN_PRIVILEGES), nullptr, nullptr);
+    bool result = (adjusted != FALSE) && (GetLastError() != ERROR_NOT_ALL_ASSIGNED);
     CloseHandle(token);
-    
+
     return result;
 }
 
@@ -227,9 +232,16 @@ String GetLastErrorString(DWORD error_code) {
         nullptr, error_code, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
         (LPWSTR)&message_buffer, 0, nullptr);
     
+    // FormatMessageW returns 0 and leaves message_buffer null for error codes
+    // it cannot map. Constructing a std::wstring from (nullptr, 0) is UB, so
+    // the result must be checked rather than assumed.
+    if (size == 0 || message_buffer == nullptr) {
+        return L"Unknown error " + std::to_wstring(error_code);
+    }
+
     String message(message_buffer, size);
     LocalFree(message_buffer);
-    
+
     return Trim(message);
 }
 
@@ -416,9 +428,14 @@ bool EnableBackupPrivilege() {
     tp.Privileges[0].Luid = luid;
     tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
     
-    bool result = AdjustTokenPrivileges(token, FALSE, &tp, sizeof(TOKEN_PRIVILEGES), nullptr, nullptr) != FALSE;
+    // AdjustTokenPrivileges returns TRUE even when it assigned nothing: it
+    // reports ERROR_NOT_ALL_ASSIGNED via GetLastError. Without this check a
+    // non-admin run reported the privilege as successfully enabled, and the
+    // OpenProcess calls that depend on it then failed with no explanation.
+    BOOL adjusted = AdjustTokenPrivileges(token, FALSE, &tp, sizeof(TOKEN_PRIVILEGES), nullptr, nullptr);
+    bool result = (adjusted != FALSE) && (GetLastError() != ERROR_NOT_ALL_ASSIGNED);
     CloseHandle(token);
-    
+
     return result;
 }
 
