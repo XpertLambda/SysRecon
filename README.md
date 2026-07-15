@@ -325,7 +325,7 @@ sysrecon.exe
 
 **Interactive Menu Features:**
 - 🎯 **User-Friendly Interface**: Navigate through options with simple number selections
-- ✅ **Option Validation**: All menu options are tested and guaranteed to work
+- ✅ **Option Validation**: Menu input is range-checked and re-prompts on invalid entries
 - 📋 **Module Selection**: Easily choose which security modules to run
 - ⚙️ **Configuration**: Change settings without remembering command-line syntax
 - 📊 **Report Options**: Select output formats visually
@@ -1403,17 +1403,31 @@ To the information security community for continuous research, threat intelligen
 
 | Platform | Compiler | Status |
 |----------|----------|--------|
-| Linux → Windows | MinGW-w64 GCC 15.2.0 | ✅ Passing |
-| Windows | Visual Studio 2022 (MSVC) | ✅ Passing |
-| Windows | MinGW-w64 (Native) | ✅ Passing |
+| Linux → Windows | MinGW-w64 GCC | ✅ Passing (verified in CI on every push) |
+| Windows | Visual Studio 2022 (MSVC) | ⚠️ Not verified — not covered by CI |
+| Windows | MinGW-w64 (Native) | ⚠️ Not verified — not covered by CI |
 
 ### Test Coverage
 
-- ✅ Unit tests for core modules
-- ✅ Integration tests for Windows API calls
-- ✅ Regression tests for known issues
-- ✅ Performance benchmarks
-- 🔄 Continuous integration (planned)
+- ✅ Continuous integration (GitHub Actions): native unit tests, Windows
+  cross-compile, and a wine smoke test on every push and pull request
+- ✅ Unit tests for the platform-independent core (`sysrecon_core`): report
+  escaping (HTML/CSV), whitelist matching, path handling, IPv4 parsing
+- ✅ Regression tests pinning known security issues: report XSS, CSV formula
+  injection, whitelist evasion via masquerading, and loss of redirected output
+- 🔄 Unit tests for `Utils` and `Logger` — pending their split out of the
+  Win32-coupled executable target (`tests/test_core.cpp` is not yet built)
+- 🔄 Integration tests against live Windows APIs — currently manual, on a
+  Windows VM; see the Verification section of the delivery plan
+- ❌ Performance benchmarks — not implemented
+
+Run the suite with:
+
+```bash
+cmake -S . -B build-tests -DSYSRECON_BUILD_TESTS=ON
+cmake --build build-tests --target sysrecon_tests -j$(nproc)
+cd build-tests && ctest --output-on-failure
+```
 
 ---
 

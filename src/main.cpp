@@ -550,13 +550,26 @@ int RunScan(CommandLineOptions& options) {
     }
     
     Logger::Instance().Info(L"Starting scan...");
-    
-    // Run the scan
-    bool success = engine.RunFullScan();
+
+    // Run the scan. --quick runs the essential checks only; it previously fell
+    // through to a full scan, making the flag (and the installer's Quick Scan
+    // shortcut) silently meaningless.
+    bool success = options.quick ? engine.RunQuickScan() : engine.RunFullScan();
     
     if (!success) {
         Logger::Instance().Error(L"Scan failed");
         return 1;
+    }
+
+    // Individual modules may fail (missing privileges, an API unavailable on
+    // this host) without invalidating the rest of the scan. Surface those
+    // rather than letting the run look clean.
+    if (engine.HasErrors()) {
+        std::wcout << L"\n[WARNING] Some checks did not complete:\n";
+        for (const auto& err : engine.GetErrors()) {
+            std::wcout << L"  * " << err << L"\n";
+        }
+        std::wcout << L"  Reports below cover the checks that did complete.\n";
     }
     
     Logger::Instance().Info(L"Scan completed successfully!");

@@ -155,26 +155,38 @@ bool ScanEngine::RunFullScan() {
 
 bool ScanEngine::RunQuickScan() {
     SYSRECON_LOG_INFO(L"Starting quick scan (essential checks only)");
-    
-    bool success = true;
-    
+
+    // A failure in one module must not discard the findings of the others --
+    // the earlier `success &= ...` meant a single failing check (e.g.
+    // NetUserEnum on a host with no local accounts) threw away the whole scan
+    // and produced no report at all. Failures are recorded and surfaced via
+    // GetErrors(); the scan itself succeeds if it ran to completion. This
+    // matches RunFullScan's contract.
     if (IsModuleEnabled(ModuleType::Accounts) && user_enum_) {
-        success &= user_enum_->EnumerateUsers();
+        if (!user_enum_->EnumerateUsers()) {
+            AddError(L"Quick scan: user enumeration failed");
+        }
     }
-    
+
     if (IsModuleEnabled(ModuleType::Services) && service_enum_) {
-        success &= service_enum_->EnumerateServices();
+        if (!service_enum_->EnumerateServices()) {
+            AddError(L"Quick scan: service enumeration failed");
+        }
     }
-    
+
     if (IsModuleEnabled(ModuleType::Network) && network_enum_) {
-        success &= network_enum_->EnumerateListeningPorts();
+        if (!network_enum_->EnumerateListeningPorts()) {
+            AddError(L"Quick scan: listening port enumeration failed");
+        }
     }
-    
+
     if (IsModuleEnabled(ModuleType::Registry) && registry_analyzer_) {
-        success &= registry_analyzer_->AnalyzeStartupKeys();
+        if (!registry_analyzer_->AnalyzeStartupKeys()) {
+            AddError(L"Quick scan: registry startup analysis failed");
+        }
     }
-    
-    return success;
+
+    return true;
 }
 
 bool ScanEngine::RunModuleScan(ModuleType module) {
