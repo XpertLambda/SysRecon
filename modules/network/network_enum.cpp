@@ -28,39 +28,53 @@ bool NetworkEnumerator::EnumerateConnections() {
     SYSRECON_LOG_INFO(L"Enumerating network connections...");
     
 #ifdef _WIN32
-    PMIB_TCPTABLE2 pTcpTable = nullptr;
+    // Re-enumeration must not append to prior results.
+    connections_.clear();
+
     DWORD dwSize = 0;
     DWORD dwRetVal = 0;
-    
-    // Get TCP table size
-    dwRetVal = GetTcpTable2(pTcpTable, &dwSize, TRUE);
-    if (dwRetVal == ERROR_INSUFFICIENT_BUFFER) {
-        pTcpTable = (MIB_TCPTABLE2*)malloc(dwSize);
-        if (pTcpTable == nullptr) {
-            SYSRECON_LOG_ERROR(L"Failed to allocate memory for TCP table");
-            return false;
-        }
+
+    // Size query. Anything other than ERROR_INSUFFICIENT_BUFFER means the
+    // table cannot be read; the old code carried on and passed a null pointer
+    // to the second call, then reported success with zero connections.
+    dwRetVal = GetTcpTable2(nullptr, &dwSize, TRUE);
+    if (dwRetVal != ERROR_INSUFFICIENT_BUFFER) {
+        SYSRECON_LOG_ERROR(L"GetTcpTable2 size query failed: " +
+                           Core::Utils::GetLastErrorString(dwRetVal));
+        return false;
     }
-    
-    // Get TCP connections
-    if ((dwRetVal = GetTcpTable2(pTcpTable, &dwSize, TRUE)) == NO_ERROR) {
-        for (DWORD i = 0; i < pTcpTable->dwNumEntries; i++) {
-            MIB_TCPROW2 row = pTcpTable->table[i];
-            
-            NetworkConnection conn;
-            conn.protocol = L"TCP";
-            conn.local_address = Core::Utils::IpAddressToString(ntohl(row.dwLocalAddr));
-            conn.local_port = ntohs((u_short)row.dwLocalPort);
-            conn.remote_address = Core::Utils::IpAddressToString(ntohl(row.dwRemoteAddr));
-            conn.remote_port = ntohs((u_short)row.dwRemotePort);
-            conn.state = ConnectionStateToString(row.dwState);
-            conn.process_id = row.dwOwningPid;
-            conn.risk_level = SecurityLevel::Low;
-            
-            connections_.push_back(conn);
-        }
-        
-        free(pTcpTable);
+
+    // unique_ptr: the previous `free()` sat inside the success branch, so the
+    // buffer leaked whenever the second call failed (which it legitimately can
+    // -- the table may grow between the two calls).
+    std::unique_ptr<void, decltype(&free)> tcp_buffer(malloc(dwSize), &free);
+    if (!tcp_buffer) {
+        SYSRECON_LOG_ERROR(L"Failed to allocate memory for TCP table");
+        return false;
+    }
+    auto* pTcpTable = static_cast<PMIB_TCPTABLE2>(tcp_buffer.get());
+
+    dwRetVal = GetTcpTable2(pTcpTable, &dwSize, TRUE);
+    if (dwRetVal != NO_ERROR) {
+        SYSRECON_LOG_ERROR(L"GetTcpTable2 failed: " +
+                           Core::Utils::GetLastErrorString(dwRetVal));
+        return false;
+    }
+
+    for (DWORD i = 0; i < pTcpTable->dwNumEntries; i++) {
+        const MIB_TCPROW2& row = pTcpTable->table[i];
+
+        NetworkConnection conn;
+        conn.protocol = L"TCP";
+        conn.local_address = Core::Utils::IpAddressToString(ntohl(row.dwLocalAddr));
+        conn.local_port = ntohs((u_short)row.dwLocalPort);
+        conn.remote_address = Core::Utils::IpAddressToString(ntohl(row.dwRemoteAddr));
+        conn.remote_port = ntohs((u_short)row.dwRemotePort);
+        conn.state = ConnectionStateToString(row.dwState);
+        conn.process_id = row.dwOwningPid;
+        conn.risk_level = SecurityLevel::Low;
+
+        connections_.push_back(conn);
     }
     
     // Get UDP table

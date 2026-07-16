@@ -679,7 +679,16 @@ int InteractiveMode() {
                 case 1: { // Full scan
                     std::wcout << L"\n[*] Running full system scan...\n";
                     WaitForKey();
-                    int result = RunScan(options);
+                    // Start from the persistent settings but force a genuine
+                    // full scan: `options` is shared across menu actions, so a
+                    // prior visit to the module-selection menu would otherwise
+                    // silently turn "Full System Scan" into a selective one.
+                    CommandLineOptions full = options;
+                    full.selective_scan = false;
+                    full.quick = false;
+                    full.accounts_only = full.services_only = full.processes_only = false;
+                    full.network_only = full.registry_only = full.memory_only = false;
+                    int result = RunScan(full);
                     if (result == 0) {
                         std::wcout << L"\n[+] Scan completed successfully!\n";
                     } else {
@@ -729,23 +738,36 @@ int InteractiveMode() {
                             options.memory_only = true;
                             options.selective_scan = true;
                             break;
-                        case 8:
-                            if (options.selective_scan) {
-                                std::wcout << L"\n[*] Starting selective scan...\n";
-                                WaitForKey();
-                                int result = RunScan(options);
-                                if (result == 0) {
-                                    std::wcout << L"\n[+] Scan completed successfully!\n";
-                                } else {
-                                    std::wcout << L"\n[-] Scan failed! Check the logs for details.\n";
-                                }
-                                WaitForKey();
-                                selecting = false;
-                            } else {
+                        case 8: {
+                            // Check that a module is actually selected, not
+                            // merely that the selection menu was visited:
+                            // selective_scan is sticky, so toggling every
+                            // module back off still passed this guard and ran
+                            // a zero-module scan reported as a success.
+                            const bool any_selected =
+                                options.accounts_only || options.services_only ||
+                                options.processes_only || options.network_only ||
+                                options.registry_only || options.memory_only;
+
+                            if (!any_selected) {
                                 std::wcout << L"\n[!] Please select at least one module!\n";
                                 WaitForKey();
+                                break;
                             }
+
+                            options.selective_scan = true;
+                            std::wcout << L"\n[*] Starting selective scan...\n";
+                            WaitForKey();
+                            int result = RunScan(options);
+                            if (result == 0) {
+                                std::wcout << L"\n[+] Scan completed successfully!\n";
+                            } else {
+                                std::wcout << L"\n[-] Scan failed! Check the logs for details.\n";
+                            }
+                            WaitForKey();
+                            selecting = false;
                             break;
+                        }
                         case 0:
                             selecting = false;
                             break;

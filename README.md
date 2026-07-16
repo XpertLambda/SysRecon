@@ -132,7 +132,7 @@ SysRecon is an enterprise-class security assessment platform designed to provide
 | **Target OS** | Windows 10, Windows 11, Server 2016/2019/2022 |
 | **Architecture** | x64 (64-bit) only |
 | **Compiler** | MinGW-w64 GCC 15.2.0 (cross-compilation) or MSVC 2022 (native) |
-| **Binary Format** | PE32+ executable with code signing support |
+| **Binary Format** | PE32+ executable (release binaries are not currently signed) |
 | **Dependencies** | nlohmann/json 3.11.3 (header-only, embedded) |
 | **Binary Size** | ~18 MB (optimized release build) |
 
@@ -509,11 +509,15 @@ Leverages custom configuration profiles for compliance-specific assessments.
 
 ### Advanced Options
 
-| Option | Description |
-|--------|-------------|
-| `--no-admin-check` | Skip administrator privilege verification (not recommended) |
-| `--timeout <seconds>` | Set maximum execution time per module (default: 300) |
-| `--threads <count>` | Set thread pool size for parallel operations (default: 4) |
+Administrator enforcement is controlled by `general.require_admin` in
+`config.json` rather than a command-line flag. It is applied only when a
+configuration file is actually loaded.
+
+> **Note:** SysRecon executes its modules sequentially and does not enforce
+> per-module timeouts. Earlier documentation described `--threads` and
+> `--timeout` options; no such options existed, and the corresponding
+> `max_threads` / `timeout_seconds` settings have been removed from
+> `config.json` rather than left as settings that do nothing. See the Roadmap.
 
 ---
 
@@ -1062,13 +1066,13 @@ SysRecon/
 #### Modularity
 Each assessment capability is encapsulated in an independent module with well-defined interfaces, enabling:
 - Selective module execution
-- Parallel processing where applicable
 - Easy extension with new assessment capabilities
 
 #### Performance
 - **Minimal Footprint**: Compiled to native x64 code with no runtime dependencies
-- **Efficient Memory Usage**: Streaming report generation prevents memory exhaustion
-- **Parallel Execution**: Thread pool architecture for concurrent module execution
+- **Sequential Execution**: Modules run one after another. There is no thread
+  pool and no concurrency; a slow module (for example memory analysis on a busy
+  host) extends the total scan time. Parallel execution is on the roadmap.
 
 #### Reliability
 - **Error Handling**: Comprehensive exception handling and graceful degradation
@@ -1289,23 +1293,38 @@ A:
 
 ## Roadmap
 
+### Deferred from 1.1.0
+
+These were previously present as configuration settings or declared API that the
+binary did not implement. They have been removed rather than left in place doing
+nothing, and are listed here as genuine future work:
+
+- 🔄 **Report encryption and signing**: `encrypt_output` / `sign_reports`
+  previously produced an unencrypted, unsigned report with no warning.
+- 🔄 **Parallel module execution and per-module timeouts**: `max_threads` /
+  `timeout_seconds` had no implementation behind them.
+- 🔄 **PDF / XML / plain-text reports**: JSON, CSV and HTML are supported.
+- 🔄 **Report compression**: `compress_output` was ignored.
+- 🔄 **Signed release binaries** and published checksums.
+
 ### Planned Features
 
-#### Version 1.1.0 (Q1 2026)
+#### Next release
+- 🔄 **Differential Analysis**: Compare scan results to identify configuration
+  drift — the single highest-value addition for separating signal from noise
 - 🔄 **Active Directory Integration**: Domain user enumeration and GPO analysis
 - 🔄 **Scheduled Scanning**: Built-in task scheduling without Task Scheduler
-- 🔄 **Differential Analysis**: Compare scan results to identify configuration drift
 - 🔄 **Custom Rules Engine**: User-defined detection rules and policies
 - 🔄 **PowerShell Module**: Native PowerShell cmdlets for integration
 
-#### Version 1.2.0 (Q2 2026)
+#### Later
 - 🔄 **Web Dashboard**: Central management console for multiple endpoints
 - 🔄 **Real-time Monitoring**: Continuous assessment with alerting
 - 🔄 **Remediation Actions**: Automated fix capabilities for common issues
 - 🔄 **Compliance Profiles**: Pre-built templates for major frameworks (CIS, NIST, PCI-DSS)
 - 🔄 **Advanced Memory Analysis**: Enhanced shellcode detection and YARA rule support
 
-#### Version 2.0.0 (Q3 2026)
+#### Longer term
 - 🔄 **Cloud Integration**: Azure AD and Microsoft 365 security assessment
 - 🔄 **Container Support**: Docker and Kubernetes security scanning
 - 🔄 **API Server**: RESTful API for programmatic access
@@ -1318,35 +1337,24 @@ Want to see a specific feature? Submit a feature request via GitHub Issues.
 
 ---
 
-## Performance Benchmarks
+## Performance
 
-### Scan Duration (Average System)
+> **These are rough expectations, not measured benchmarks.** SysRecon has no
+> benchmark suite; scan time depends heavily on the number of services and
+> processes on the host, and on whether the memory module is enabled. Treat the
+> figures below as order-of-magnitude guidance and measure on your own estate.
 
-| Scan Type | Duration | Modules |
-|-----------|----------|---------|
-| Quick Scan | 30-45 seconds | Accounts, Services |
-| Standard Scan | 2-3 minutes | All except Memory |
-| Full Scan | 5-10 minutes | All modules |
-| Memory-Only Scan | 3-8 minutes | Memory forensics |
+### Scan Scope
 
-**Test System**: Windows 10 Pro, Intel Core i5-8250U, 16GB RAM, SSD
+| Scan Type | Modules |
+|-----------|---------|
+| Quick Scan (`--quick`) | Accounts, Services, Network (listening ports), Registry (startup keys) |
+| Full Scan (default) | All enabled modules, subject to `config.json` |
+| Memory | Disabled by default — see Operational Considerations before enabling |
 
-### Resource Usage
-
-| Metric | Quick Scan | Full Scan | Memory Scan |
-|--------|-----------|-----------|-------------|
-| CPU Usage | 5-15% | 10-25% | 15-40% |
-| Memory Usage | 50-100 MB | 100-200 MB | 200-500 MB |
-| Disk I/O | Minimal | Low | Moderate |
-
-### Scalability
-
-| System Type | Typical Scan Time | Notes |
-|-------------|-------------------|-------|
-| Workstation (< 50 services) | 2-3 minutes | Standard desktop |
-| Power User (50-100 services) | 3-5 minutes | Developer workstation |
-| Server (100-200 services) | 5-10 minutes | Domain controller, database server |
-| Enterprise Server (200+ services) | 10-15 minutes | Large application servers |
+Modules run sequentially, so total scan time is the sum of the enabled modules.
+Memory analysis dominates when enabled, because it walks the address space of
+every non-whitelisted process.
 
 ---
 
@@ -1442,12 +1450,42 @@ cd build-tests && ctest --output-on-failure
 - No data sent to external servers
 - Reports stored locally only
 
+### Operational Considerations
+
+Read this before running SysRecon on a production or monitored host.
+
+- **It will likely trigger EDR.** The memory module opens other processes with
+  `PROCESS_VM_READ` and walks their address space — including `lsass.exe`. That
+  is the canonical credential-dumping signature, and the binary also links
+  `dbghelp` and can call `MiniDumpWriteDump`. Expect alerts, and coordinate with
+  your security team before running it. Disable the memory module
+  (`modules.memory.enabled: false`, the default) if you do not need it.
+- **Reports are sensitive and are not protected.** They contain usernames, SIDs,
+  administrator group membership, full service paths, listening ports, and
+  network interface MAC/IP addresses. They are written with default inherited
+  ACLs, and are neither compressed nor encrypted — SysRecon does not implement
+  at-rest encryption or report signing. Store them accordingly.
+- **The output directory is relative to the working directory.** The default is
+  `./reports`. Launched from an elevated shell (which typically starts in
+  `C:\Windows\System32`), that is where reports will be written. Pass `-o` or
+  set `output.output_directory` explicitly.
+- **Administrator rights are required for complete results.** Without them,
+  process image paths, service configuration and memory inspection are partly
+  or wholly unavailable, and SysRecon reports which checks did not complete
+  rather than silently returning a clean result.
+- **Findings are leads, not verdicts.** Detections such as "runs from a
+  user-writable location" legitimately match installers and updaters. Confirm
+  before acting.
+
 ### Security Best Practices
 
 When using SysRecon in production environments:
 
-1. **Verify Digital Signatures**: Always verify the executable signature before deployment
-2. **Secure Report Storage**: Store reports in encrypted locations with appropriate ACLs
+1. **Verify the Binary**: Check the published SHA256 of the release you
+   downloaded. Note that release binaries are not currently Authenticode-signed,
+   so SmartScreen and some EDR products will flag them.
+2. **Secure Report Storage**: Move reports to a location with restricted ACLs;
+   SysRecon does not encrypt them (see Operational Considerations above).
 3. **Access Control**: Limit SysRecon execution to authorized personnel only
 4. **Audit Logging**: Enable Windows audit logging to track SysRecon execution
 5. **Regular Updates**: Keep SysRecon updated for latest security improvements

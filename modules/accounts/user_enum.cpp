@@ -141,43 +141,47 @@ bool UserEnumerator::EnumerateLocalUsers() {
                 wchar_t* domainName = nullptr;
                 DWORD cbDomain = 0;
                 
-                // First call to get buffer sizes
-                LookupAccountNameW(nullptr, user.username.c_str(), nullptr, &cbSid, nullptr, &cbDomain, &sidType);
-                
-                if (cbSid > 0) {
+                // First call is expected to fail with ERROR_INSUFFICIENT_BUFFER
+                // and report the required sizes. Any other failure (notably
+                // ERROR_NONE_MAPPED) means there is no SID to look up, and
+                // proceeding would allocate and read garbage.
+                LookupAccountNameW(nullptr, user.username.c_str(), nullptr, &cbSid,
+                                   nullptr, &cbDomain, &sidType);
+
+                if (GetLastError() == ERROR_INSUFFICIENT_BUFFER && cbSid > 0 && cbDomain > 0) {
                     pSid = (PSID)LocalAlloc(LPTR, cbSid);
                     domainName = (wchar_t*)LocalAlloc(LPTR, cbDomain * sizeof(wchar_t));
-                    
-                    if (LookupAccountNameW(nullptr, user.username.c_str(), pSid, &cbSid, domainName, &cbDomain, &sidType)) {
+
+                    if (pSid && domainName &&
+                        LookupAccountNameW(nullptr, user.username.c_str(), pSid, &cbSid,
+                                           domainName, &cbDomain, &sidType)) {
                         user.sid = SidToString(pSid);
                     }
-                    
+
                     if (pSid) LocalFree(pSid);
                     if (domainName) LocalFree(domainName);
                 }
                 
                 // Convert timestamps
+                // USER_INFO_3 time fields are seconds since 1970-01-01 UTC, not
+                // FILETIME. They were previously packed into a FILETIME and run
+                // through the 1601-epoch conversion, which subtracted ~1.16e17
+                // from a value of ~1.7e9 and produced dates roughly 3600 years
+                // in the past.
                 if (pUserInfo->usri3_last_logon != 0) {
-                    FILETIME ft = {0, 0};
-                    ULARGE_INTEGER ull;
-                    ull.QuadPart = pUserInfo->usri3_last_logon;
-                    ft.dwLowDateTime = ull.LowPart;
-                    ft.dwHighDateTime = ull.HighPart;
-                    user.last_logon = FileTimeToSystemTime(ft);
+                    user.last_logon = std::chrono::system_clock::from_time_t(
+                        static_cast<time_t>(pUserInfo->usri3_last_logon));
                 }
-                
+
                 if (pUserInfo->usri3_password_age != 0) {
                     auto now = std::chrono::system_clock::now();
                     user.password_last_set = now - std::chrono::seconds(pUserInfo->usri3_password_age);
                 }
-                
-                if (pUserInfo->usri3_acct_expires != TIMEQ_FOREVER) {
-                    FILETIME ft = {0, 0};
-                    ULARGE_INTEGER ull;
-                    ull.QuadPart = pUserInfo->usri3_acct_expires;
-                    ft.dwLowDateTime = ull.LowPart;
-                    ft.dwHighDateTime = ull.HighPart;
-                    user.account_expires = FileTimeToSystemTime(ft);
+
+                if (pUserInfo->usri3_acct_expires != TIMEQ_FOREVER &&
+                    pUserInfo->usri3_acct_expires != 0) {
+                    user.account_expires = std::chrono::system_clock::from_time_t(
+                        static_cast<time_t>(pUserInfo->usri3_acct_expires));
                 }
                 
                 users_.push_back(user);
