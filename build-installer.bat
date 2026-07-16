@@ -88,7 +88,8 @@ if %ERRORLEVEL% EQU 0 (
     echo Installer Build Successful!
     echo ============================================
     echo.
-    echo Installer created: SysRecon-Setup-1.0.0.exe
+    for /f "tokens=3 delims= " %%v in ('findstr /b "!define PRODUCT_VERSION" installer.nsi') do set SETUP_VERSION=%%~v
+    echo Installer created: SysRecon-Setup-%SETUP_VERSION%.exe
     echo.
     echo You can now distribute this installer to users.
     echo The installer includes:

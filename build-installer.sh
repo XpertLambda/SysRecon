@@ -16,6 +16,11 @@
 
 set -e  # Exit on error
 
+# Read the version from installer.nsi so this script cannot drift out of sync
+# with the installer it builds.
+VERSION="$(sed -n 's/^!define PRODUCT_VERSION "\(.*\)"/\1/p' installer.nsi)"
+SETUP_EXE="SysRecon-Setup-${VERSION}.exe"
+
 echo "============================================"
 echo "SysRecon Installer Build Script (Linux)"
 echo "============================================"
@@ -112,9 +117,9 @@ if makensis -V4 installer.nsi; then
     echo -e "${GREEN}Installer Build Successful!${NC}"
     echo "============================================"
     echo
-    echo "Installer created: SysRecon-Setup-1.0.0.exe"
+    echo "Installer created: ${SETUP_EXE}"
     echo
-    echo "File size: $(du -h SysRecon-Setup-*.exe | cut -f1)"
+    echo "File size: $(du -h "${SETUP_EXE}" | cut -f1)"
     echo
     echo "You can now transfer this installer to Windows and run it."
     echo "The installer includes:"
@@ -127,7 +132,7 @@ if makensis -V4 installer.nsi; then
     echo "  ✓ Uninstaller"
     echo
     echo "To test on Windows:"
-    echo "  1. Transfer SysRecon-Setup-1.0.0.exe to Windows"
+    echo "  1. Transfer ${SETUP_EXE} to Windows"
     echo "  2. Right-click and 'Run as Administrator'"
     echo "  3. Follow the installation wizard"
     echo
