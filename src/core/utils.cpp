@@ -281,7 +281,9 @@ String GetCurrentTimestamp() {
     auto time_t = std::chrono::system_clock::to_time_t(now);
     
     std::wstringstream ss;
-    ss << std::put_time(std::localtime(&time_t), L"%Y%m%d_%H%M%S");
+    std::tm tm_buf{};
+    localtime_s(&tm_buf, &time_t);
+    ss << std::put_time(&tm_buf, L"%Y%m%d_%H%M%S");
     
     return ss.str();
 }
@@ -290,7 +292,9 @@ String FormatTimestamp(const std::chrono::system_clock::time_point& time, const 
     auto time_t = std::chrono::system_clock::to_time_t(time);
     
     std::wstringstream ss;
-    ss << std::put_time(std::localtime(&time_t), format.c_str());
+    std::tm tm_buf{};
+    localtime_s(&tm_buf, &time_t);
+    ss << std::put_time(&tm_buf, format.c_str());
     
     return ss.str();
 }

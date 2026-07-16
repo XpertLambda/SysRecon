@@ -494,6 +494,16 @@ int RunScan(CommandLineOptions& options) {
 
     // Modules exist only after Initialize(), so per-module options land here.
     engine.ApplyConfigToModules();
+
+    // Enable file logging now that the output directory is resolved.
+    // Logger::SetLogFile was never called anywhere, so file_output_ stayed
+    // false and every "check the logs" message referred to console output that
+    // had already scrolled past.
+    {
+        const String log_path = engine.GetOutputDirectory() + L"/sysrecon.log";
+        Logger::Instance().SetLogFile(log_path);
+        Logger::Instance().Info(L"Log file: " + log_path);
+    }
     
     // Configure selective module scanning
     if (options.selective_scan) {
