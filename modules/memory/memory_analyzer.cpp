@@ -96,7 +96,7 @@ bool MemoryAnalyzer::AnalyzeProcessMemory(DWORD process_id) {
     memory_info.image_path = GetProcessImagePath(process_id);
     
     // Get memory statistics
-    PROCESS_MEMORY_COUNTERS_EX pmc = {0};
+    PROCESS_MEMORY_COUNTERS_EX pmc = {};
     pmc.cb = sizeof(pmc);
     if (GetProcessMemoryInfo(hProcess, (PROCESS_MEMORY_COUNTERS*)&pmc, sizeof(pmc))) {
         memory_info.working_set = pmc.WorkingSetSize;
@@ -182,7 +182,7 @@ bool MemoryAnalyzer::EnumerateProcessMemory(DWORD process_id, std::vector<Memory
     DWORD_PTR max_address = (DWORD_PTR)sys_info.lpMaximumApplicationAddress;
     
     while (address < max_address) {
-        MEMORY_BASIC_INFORMATION mbi = {0};
+        MEMORY_BASIC_INFORMATION mbi = {};
         if (VirtualQueryEx(hProcess, (LPCVOID)address, &mbi, sizeof(mbi)) == 0) {
             break;
         }
@@ -314,7 +314,7 @@ bool MemoryAnalyzer::DetectInjection() {
         return false;
     }
     
-    PROCESSENTRY32W pe32 = {0};
+    PROCESSENTRY32W pe32 = {};
     pe32.dwSize = sizeof(pe32);
     
     if (Process32FirstW(hSnapshot, &pe32)) {
@@ -406,7 +406,7 @@ bool MemoryAnalyzer::DetectDllInjection(DWORD process_id) {
     bool injection_detected = false;
 
     while (address < max_address) {
-        MEMORY_BASIC_INFORMATION mbi = {0};
+        MEMORY_BASIC_INFORMATION mbi = {};
         if (VirtualQueryEx(hProcess, (LPCVOID)address, &mbi, sizeof(mbi)) == 0) {
             break;
         }

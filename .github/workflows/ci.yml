@@ -44,7 +44,8 @@ jobs:
           cmake -S . -B build \
             -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-w64-x86_64.cmake \
             -DCMAKE_BUILD_TYPE=Release \
-            -DSYSRECON_BUILD_TESTS=OFF
+            -DSYSRECON_BUILD_TESTS=OFF \
+            -DSYSRECON_WERROR=ON
 
       - name: Build
         run: cmake --build build -j$(nproc)

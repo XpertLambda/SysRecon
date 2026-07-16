@@ -370,7 +370,11 @@ String GetWindowsVersion() {
     HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
     if (ntdll) {
         typedef LONG (WINAPI* RtlGetVersionPtr)(PRTL_OSVERSIONINFOW);
-        RtlGetVersionPtr RtlGetVersion = (RtlGetVersionPtr)GetProcAddress(ntdll, "RtlGetVersion");
+        // Cast via void*: casting FARPROC straight to a typed function
+        // pointer is a -Wcast-function-type violation.
+        RtlGetVersionPtr RtlGetVersion =
+            reinterpret_cast<RtlGetVersionPtr>(
+                reinterpret_cast<void*>(GetProcAddress(ntdll, "RtlGetVersion")));
         
         if (RtlGetVersion) {
             RTL_OSVERSIONINFOW rovi = {};
@@ -508,8 +512,10 @@ String GetProcessName(DWORD process_id) {
 bool IsWow64Process() {
     BOOL isWow64 = FALSE;
     typedef BOOL (WINAPI *LPFN_ISWOW64PROCESS) (HANDLE, PBOOL);
-    LPFN_ISWOW64PROCESS fnIsWow64Process = (LPFN_ISWOW64PROCESS)GetProcAddress(
-        GetModuleHandleW(L"kernel32"), "IsWow64Process");
+    LPFN_ISWOW64PROCESS fnIsWow64Process =
+        reinterpret_cast<LPFN_ISWOW64PROCESS>(
+            reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"kernel32"),
+                                                   "IsWow64Process")));
     
     if (fnIsWow64Process != nullptr) {
         if (!fnIsWow64Process(GetCurrentProcess(), &isWow64)) {
