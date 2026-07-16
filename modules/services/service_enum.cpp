@@ -5,10 +5,7 @@ namespace SysRecon {
 namespace Modules {
 
 ServiceEnumerator::ServiceEnumerator() 
-    : analyze_startup_(true)
-    , check_dependencies_(true)
-    , verify_signatures_(false)
-    , initialized_(false)
+    : initialized_(false)
     , scm_handle_(nullptr) {
 }
 
@@ -28,9 +25,18 @@ bool ServiceEnumerator::EnumerateServices() {
     SYSRECON_LOG_INFO(L"Enumerating Windows services...");
     
 #ifdef _WIN32
+    // Re-enumeration must not append to prior results, and must not leak the
+    // previously held SCM handle by overwriting it.
+    services_.clear();
+    if (scm_handle_) {
+        CloseServiceHandle(scm_handle_);
+        scm_handle_ = nullptr;
+    }
+
     scm_handle_ = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_ENUMERATE_SERVICE);
     if (!scm_handle_) {
-        SYSRECON_LOG_ERROR(L"Failed to open Service Control Manager");
+        SYSRECON_LOG_ERROR(L"Failed to open Service Control Manager: " +
+                           Core::Utils::GetLastErrorString());
         return false;
     }
     

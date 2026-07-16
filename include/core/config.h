@@ -92,8 +92,6 @@ private:
     ConfigManager(const ConfigManager&) = delete;
     ConfigManager& operator=(const ConfigManager&) = delete;
     
-    bool ParseConfigFile(const String& content);
-    String SerializeConfig() const;
     
     ScanConfig config_;
     mutable StringVector validation_errors_;

@@ -755,15 +755,6 @@ bool MemoryAnalyzer::IsCommittedRegion(DWORD state) {
     return state == MEM_COMMIT;
 }
 
-// Stub implementations for methods not fully implemented yet
-bool MemoryAnalyzer::DetectManualDllLoad(DWORD process_id) { return false; }
-bool MemoryAnalyzer::DetectReflectiveDllLoad(DWORD process_id) { return false; }
-bool MemoryAnalyzer::DetectAtomBombing(DWORD process_id) { return false; }
-StringVector MemoryAnalyzer::FindSuspiciousProcesses() { return StringVector(); }
-StringVector MemoryAnalyzer::FindCodeInjection() { return StringVector(); }
-StringVector MemoryAnalyzer::FindHollowedProcesses() { return StringVector(); }
-StringVector MemoryAnalyzer::FindMalwareSignatures() { return StringVector(); }
-
 void MemoryAnalyzer::Cleanup() {
     process_memory_.clear();
     injection_indicators_.clear();

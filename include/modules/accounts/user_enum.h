@@ -71,18 +71,12 @@ private:
     bool EnumerateDomainGroups();
     bool GetUserDetails(const String& username, UserAccount& user);
     bool GetGroupMembers(const String& group_name, StringVector& members);
-    bool GetUserPrivileges(const String& username, StringVector& privileges);
     
     // Analysis helpers
     void AnalyzeUserAccount(const UserAccount& user);
-    void AnalyzeGroupMembership(const GroupInfo& group);
-    void CheckPasswordPolicy();
-    void CheckAccountLockoutPolicy();
-    void CheckUserRights();
     
     // Utility methods
     String SidToString(PSID sid);
-    bool GetAccountSid(const String& account_name, String& sid);
     DWORD GetUserFlags(const String& username);
     std::chrono::system_clock::time_point FileTimeToSystemTime(const FILETIME& ft);
     
