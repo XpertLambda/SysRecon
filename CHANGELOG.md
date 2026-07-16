@@ -2,6 +2,40 @@
 
 All notable changes to SysRecon are documented here.
 
+## [Unreleased]
+
+### Added
+
+- **Windows hardening companion.** `hardening/Invoke-SysReconHardening.ps1`
+  applies a CIS Level 1 (workstation)-aligned baseline, closing the loop with
+  the read-only audit tool (audit → remediate → re-audit). `sysrecon.exe`
+  remains strictly read-only; this separate, opt-in, elevated script is the only
+  component that writes to the OS. Safe on fresh and already-used installs:
+  preview by default (no change without `-Apply`), full backup bundle +
+  `-Rollback`, idempotent, and `-Level`/`-Include`/`-Exclude` scoping with
+  destructive controls (BitLocker, RDP-disable, Credential Guard) behind
+  explicit switches. Covers firewall, SMBv1/signing, UAC, legacy-auth, password
+  & lockout policy, Guest account, Defender + 15 ASR rules, AutoRun, advanced
+  audit policy, PowerShell logging, LSA protection, interactive-logon lockdown,
+  and RDP hardening. Full catalogue and rollback runbook in
+  `docs/HARDENING.md`.
+- `hardening/PSScriptAnalyzerSettings.psd1` documenting the intentional linter
+  exclusions.
+
+### Changed
+
+- README: new **Windows Hardening** section; the "Is SysRecon safe to run?" FAQ
+  now distinguishes the read-only `sysrecon.exe` from the opt-in hardening
+  script; Roadmap "Remediation Actions" / "Compliance Profiles" marked partially
+  delivered (CIS L1 shipped).
+
+### Known limitations
+
+- The hardening script is syntax-checked, lint-clean, and its parsing/decision/
+  selection logic is unit-tested, but it has **not** been run end-to-end on a
+  live Windows host by us. Validate on a VM (fresh + used snapshots) per the
+  checklist in `docs/HARDENING.md` before production use.
+
 ## [1.1.0] — 2026-07-16
 
 This release is the outcome of a pre-delivery audit. The headline change is

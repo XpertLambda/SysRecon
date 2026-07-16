@@ -21,6 +21,7 @@
 - [Command Reference](#command-reference)
 - [Output & Reporting](#output--reporting)
 - [Use Cases](#use-cases)
+- [Windows Hardening](#windows-hardening)
 - [Build Instructions](#build-instructions)
 - [Building the Installer](#building-the-installer)
 - [Distribution](#distribution)
@@ -721,6 +722,64 @@ REM Compare with baseline
 
 ---
 
+## Windows Hardening
+
+SysRecon audits; it does not change the system. To **act** on what it finds,
+the project ships a separate, opt-in hardening script that applies a **CIS
+Level 1 (workstation)-aligned** baseline:
+
+```
+hardening/Invoke-SysReconHardening.ps1
+```
+
+`sysrecon.exe` stays strictly read-only. This PowerShell script is the *only*
+component that writes to the OS — it is deliberately separate and elevated so
+the audit tool keeps its read-only guarantee.
+
+### The closed loop
+
+```powershell
+sysrecon.exe                              # 1. audit  -> findings
+.\hardening\Invoke-SysReconHardening.ps1  # 2. PREVIEW the fixes (changes nothing)
+.\hardening\Invoke-SysReconHardening.ps1 -Apply   # 3. back up, then remediate
+sysrecon.exe                              # 4. re-audit -> confirm findings cleared
+```
+
+### Safe on fresh *and* already-used installs
+
+The script is built around four guarantees, not bolt-ons:
+
+- **Preview by default.** Nothing changes without `-Apply`. The default run
+  prints the exact `current -> desired` change set and touches nothing.
+- **Reversible.** Before the first change it writes a timestamped backup bundle
+  (registry exports, `secedit`/`auditpol`/firewall exports) and attempts a
+  System Restore point. Undo with `-Rollback <bundle>`.
+- **Idempotent.** Each control writes only on drift; a second `-Apply` on a
+  hardened host reports zero changes.
+- **Scoped.** `-Level 1` (default) is designed not to break normal use.
+  `-Level 2` and destructive controls (`-EnableBitLocker`, `-DisableRDP`,
+  `-EnableCredentialGuard`) are opt-in behind explicit switches.
+
+### What it covers
+
+Windows Firewall · SMBv1 removal and SMB signing · UAC · legacy-auth hardening
+(NTLMv2-only, WDigest, LLMNR/NBT-NS, anonymous access) · password & lockout
+policy · Guest account · Microsoft Defender and 15 Attack Surface Reduction
+rules · AutoRun/AutoPlay · advanced audit policy (incl. process-creation
+command line) · PowerShell logging · LSA protection · interactive-logon
+lockdown · RDP hardening. See **[docs/HARDENING.md](docs/HARDENING.md)** for the
+full control catalogue with CIS references, per-control breakage notes, the
+rollback runbook, and the VM validation checklist.
+
+> **Honest scope.** This is a pragmatic scripted subset of CIS L1 for a
+> standalone workstation — not a replacement for full CIS-CAT tooling or the
+> Microsoft Security Baseline GPOs, and it does not claim to secure
+> "everything." It has been syntax- and lint-checked and its logic unit-tested,
+> but **not yet run end-to-end on a live Windows host by us**; validate on a VM
+> (fresh + used snapshots) before production use.
+
+---
+
 ## Build Instructions
 
 > **📘 For Complete Build Guide**: See [BUILD_GUIDE.md](BUILD_GUIDE.md) for comprehensive instructions including:
@@ -1160,7 +1219,7 @@ Misuse of this tool for unauthorized access, malicious purposes, or any illegal 
 A: Yes, most scanning modules require elevated privileges to access system-level Windows APIs and security information.
 
 **Q: Is SysRecon safe to run?**  
-A: Yes, SysRecon is a read-only assessment tool. It does not modify system settings, install services, or perform any destructive actions.
+A: Yes. `sysrecon.exe` is a read-only assessment tool — it does not modify system settings, install services, or perform any destructive actions. The only component that writes to the system is the separate, opt-in `hardening/Invoke-SysReconHardening.ps1` script, which you must run explicitly and elevated, previews changes by default, and backs up before applying. See [Windows Hardening](#windows-hardening).
 
 **Q: Will antivirus software flag SysRecon?**  
 A: Some antivirus software may flag SysRecon due to its system scanning capabilities and use of low-level Windows APIs. This is a false positive. Enterprise deployments should whitelist the application.
@@ -1320,8 +1379,8 @@ nothing, and are listed here as genuine future work:
 #### Later
 - 🔄 **Web Dashboard**: Central management console for multiple endpoints
 - 🔄 **Real-time Monitoring**: Continuous assessment with alerting
-- 🔄 **Remediation Actions**: Automated fix capabilities for common issues
-- 🔄 **Compliance Profiles**: Pre-built templates for major frameworks (CIS, NIST, PCI-DSS)
+- 🟡 **Remediation Actions**: A CIS L1 hardening script ships now (see [Windows Hardening](#windows-hardening)); in-tool automated remediation driven directly by findings remains future work.
+- 🟡 **Compliance Profiles**: CIS L1 (workstation) is implemented in the hardening script; NIST and PCI-DSS profiles remain future work.
 - 🔄 **Advanced Memory Analysis**: Enhanced shellcode detection and YARA rule support
 
 #### Longer term
