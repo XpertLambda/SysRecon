@@ -98,6 +98,10 @@ Var StartMenuFolder
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE "LICENSE"
+; Components page: the optional sections below (Start Menu, Desktop, PATH) and
+; their MUI_DESCRIPTION_TEXT entries were unreachable without it -- the user
+; could never see or deselect them, and NSIS warned on every build.
+!insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_STARTMENU Application $StartMenuFolder
 !insertmacro MUI_PAGE_INSTFILES
@@ -119,15 +123,20 @@ Var StartMenuFolder
 ; Installer Functions
 
 Function .onInit
-  ; Check if running on 64-bit Windows
+  ; Check if running on 64-bit Windows. A MessageBox is shown even under /S,
+  ; so the silent path aborts without prompting instead of hanging.
   ${IfNot} ${RunningX64}
+    IfSilent +2
     MessageBox MB_OK|MB_ICONSTOP "This application requires 64-bit Windows (Windows 10 or later)."
     Abort
   ${EndIf}
-  
+
   ; Check if already installed
   ReadRegStr $0 ${PRODUCT_UNINST_ROOT_KEY} "${PRODUCT_UNINST_KEY}" "UninstallString"
   ${If} $0 != ""
+    ; Under /S, upgrade in place without prompting: a MessageBox here would
+    ; block a managed deployment indefinitely.
+    IfSilent continue
     MessageBox MB_YESNO|MB_ICONQUESTION "${PRODUCT_NAME} is already installed.$\n$\nWould you like to uninstall the previous version first?" IDNO continue
     ExecWait '$0 _?=$INSTDIR'
     Delete $0
@@ -245,7 +254,11 @@ Section "Uninstall"
   ; Remove example configs
   RMDir /r "$INSTDIR\configs"
   
-  ; Ask before removing reports
+  ; Ask before removing reports. IfSilent is required: NSIS still displays a
+  ; MessageBox during a silent uninstall, so /S would block here forever
+  ; waiting for a click -- which breaks any managed deployment. Silent
+  ; uninstall keeps reports, since they are the user's data.
+  IfSilent skip_reports
   MessageBox MB_YESNO|MB_ICONQUESTION "Do you want to delete all generated reports?" IDNO skip_reports
   RMDir /r "$INSTDIR\reports"
   skip_reports:
@@ -270,8 +283,10 @@ Section "Uninstall"
   DeleteRegKey ${PRODUCT_UNINST_ROOT_KEY} "${PRODUCT_UNINST_KEY}"
   DeleteRegKey HKLM "Software\${PRODUCT_NAME}"
   
-  ; Final message
+  ; Final message (skipped under /S, which must not require interaction)
+  IfSilent uninstall_done
   MessageBox MB_OK "${PRODUCT_NAME} has been successfully uninstalled."
+  uninstall_done:
 SectionEnd
 
 ;--------------------------------
