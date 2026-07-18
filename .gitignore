@@ -192,3 +192,25 @@ Doxyfile.bak
 
 # Keep .github directory for GitHub Actions
 !.github/
+
+# Added by repo-doctor
+.claude/
+.command/
+.cursor/
+.aider*
+.continue/
+.windsurf/
+.env
+.env.*
+*.pem
+*.key
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.gguf
+*.onnx
+*.h5
+
+# repo-doctor review artifact (local only, never commit)
+REPO_DOCTOR_REPORT.md
