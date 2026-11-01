@@ -12,7 +12,7 @@ jobs:
     name: Unit tests (native)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install build dependencies
         run: |
@@ -33,7 +33,7 @@ jobs:
     name: Cross-compile for Windows (MinGW-w64)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install MinGW-w64
         run: |
@@ -54,7 +54,7 @@ jobs:
       - name: Verify artifact
         run: test -f build/sysrecon.exe
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: sysrecon-exe
           path: build/sysrecon.exe
@@ -64,9 +64,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: cross-compile
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: sysrecon-exe
           path: build
@@ -104,9 +104,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: cross-compile
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: sysrecon-exe
           path: build
@@ -119,7 +119,7 @@ jobs:
       - name: Compile installer
         run: makensis -V2 -WX installer.nsi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: sysrecon-installer
           path: SysRecon-Setup-*.exe
@@ -128,7 +128,7 @@ jobs:
     name: Lint hardening script (PSScriptAnalyzer)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Parse check
         shell: pwsh
@@ -152,9 +152,9 @@ jobs:
     runs-on: windows-latest
     needs: installer
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: sysrecon-installer
           path: dist
@@ -168,7 +168,7 @@ jobs:
 
       - name: Upload logs and reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: windows-test-output
           path: ${{ runner.temp }}/sysrecon-smoke
