@@ -1,0 +1,263 @@
+name: CI
+
+on:
+  # Every branch: feature branches (e.g. windows-hardening) previously got no
+  # CI at all because only main was listed.
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  unit-tests:
+    name: Unit tests (native)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential
+
+      - name: Configure
+        run: cmake -S . -B build-tests -DCMAKE_BUILD_TYPE=Release -DSYSRECON_BUILD_TESTS=ON -DSYSRECON_WERROR=ON
+
+      - name: Build tests
+        run: cmake --build build-tests --target sysrecon_tests -j$(nproc)
+
+      - name: Run tests
+        working-directory: build-tests
+        run: ctest --output-on-failure
+
+  cross-compile:
+    name: Cross-compile for Windows (MinGW-w64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install MinGW-w64
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mingw-w64 cmake build-essential
+
+      - name: Configure
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-w64-x86_64.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSYSRECON_BUILD_TESTS=OFF \
+            -DSYSRECON_WERROR=ON
+
+      - name: Build
+        run: cmake --build build -j$(nproc)
+
+      - name: Verify artifact
+        run: test -f build/sysrecon.exe
+
+      - name: Verify DEP and ASLR are enabled
+        run: |
+          # README states these; keep the claim true. DllCharacteristics bits:
+          # 0x40 DYNAMIC_BASE (ASLR), 0x20 HIGH_ENTROPY_VA, 0x100 NX_COMPAT (DEP).
+          flags=$(x86_64-w64-mingw32-objdump -p build/sysrecon.exe | awk '/DllCharacteristics/ {print $2}')
+          echo "DllCharacteristics: 0x$flags"
+          for bit in 40 20 100; do
+            if (( (16#$flags & 16#$bit) == 0 )); then
+              echo "::error::sysrecon.exe is missing DllCharacteristics bit 0x$bit"; exit 1
+            fi
+          done
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: sysrecon-exe
+          path: build/sysrecon.exe
+
+  smoke-test:
+    name: Smoke test under wine
+    runs-on: ubuntu-latest
+    needs: cross-compile
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: sysrecon-exe
+          path: build
+
+      - name: Install wine
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y wine64
+
+      - name: Output must survive redirection
+        env:
+          WINEDEBUG: "-all"
+        run: |
+          chmod +x build/sysrecon.exe
+          wine build/sysrecon.exe --help > help.txt 2>/dev/null || true
+          # Regression guard: AllocConsole used to reattach stdout to an
+          # invisible console, so every redirected run produced an empty file.
+          if [ ! -s help.txt ]; then
+            echo "FAIL: --help produced no output when redirected"
+            exit 1
+          fi
+          echo "OK: captured $(wc -c < help.txt) bytes"
+
+      - name: Interactive mode must exit on end of input
+        env:
+          WINEDEBUG: "-all"
+        run: |
+          # Regression guard: GetMenuChoice looped forever when stdin hit EOF.
+          timeout 60 wine build/sysrecon.exe < /dev/null > menu.txt 2>/dev/null
+          echo "OK: interactive mode exited on EOF"
+
+  installer:
+    name: Build NSIS installer
+    runs-on: ubuntu-latest
+    needs: cross-compile
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: sysrecon-exe
+          path: build
+
+      - name: Install NSIS
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nsis
+
+      - name: Compile installer
+        run: makensis -V2 -WX installer.nsi
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: sysrecon-installer
+          path: SysRecon-Setup-*.exe
+
+  hardening-lint:
+    name: Lint hardening script (PSScriptAnalyzer)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Parse check
+        shell: pwsh
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            "$PWD/hardening/Invoke-SysReconHardening.ps1", [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) { $errors | ForEach-Object { Write-Error $_.ToString() }; exit 1 }
+
+      - name: PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          Install-Module PSScriptAnalyzer -Scope CurrentUser -Force
+          $results = Invoke-ScriptAnalyzer -Path hardening/Invoke-SysReconHardening.ps1 `
+            -Settings hardening/PSScriptAnalyzerSettings.psd1
+          $results | Format-Table -AutoSize
+          if ($results | Where-Object Severity -in 'Error','Warning') { exit 1 }
+
+  windows-test:
+    name: End-to-end test on ${{ matrix.os }} (installer + scan)
+    runs-on: ${{ matrix.os }}
+    needs: installer
+    strategy:
+      fail-fast: false
+      matrix:
+        # windows-latest: Windows Server. windows-11-arm: Windows 11 client,
+        # where the x64 binary runs under Windows' built-in x64 emulation.
+        os: [windows-latest, windows-11-arm]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: sysrecon-installer
+          path: dist
+
+      - name: Install, scan, upgrade, uninstall
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem dist -Filter 'SysRecon-Setup-*.exe' | Select-Object -First 1
+          if (-not $setup) { throw 'installer artifact not found' }
+          ./tests/windows/smoke-test.ps1 -Installer $setup.FullName -OutDir "$env:RUNNER_TEMP/sysrecon-smoke"
+
+      - name: Upload logs and reports
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-test-output-${{ matrix.os }}
+          path: ${{ runner.temp }}/sysrecon-smoke
+          if-no-files-found: ignore
+
+  hardening-test:
+    name: Hardening loop on Windows (audit, apply, re-audit, rollback)
+    runs-on: windows-latest
+    needs: cross-compile
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: sysrecon-exe
+          path: dist
+
+      - name: Audit, harden, re-audit, re-apply, roll back
+        shell: pwsh
+        run: |
+          Copy-Item config.json dist/
+          ./tests/windows/hardening-test.ps1 -SysRecon dist/sysrecon.exe -OutDir "$env:RUNNER_TEMP/sysrecon-hardening"
+
+      - name: Upload logs, reports and backup bundles
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: hardening-test-output
+          path: ${{ runner.temp }}/sysrecon-hardening
+          if-no-files-found: ignore
+
+  msvc-build:
+    name: MSVC build and unit tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Configure
+        shell: pwsh
+        run: cmake -S . -B build-msvc -A x64 -DSYSRECON_BUILD_TESTS=ON
+
+      - name: Build
+        shell: pwsh
+        run: |
+          cmake --build build-msvc --config Release --parallel 2>&1 | Tee-Object build.log
+          $code = $LASTEXITCODE
+          # MSVC diagnostics are not annotated by default; surface them.
+          Select-String -Path build.log -Pattern ':\s+(fatal )?error [A-Z]+\d+' |
+            Select-Object -First 10 | ForEach-Object { Write-Host "::error::$($_.Line.Trim())" }
+          # MSBuild repeats each diagnostic; report each distinct one once.
+          Select-String -Path build.log -Pattern ':\s+warning [A-Z]+\d+' |
+            ForEach-Object { ($_.Line.Trim() -replace '\s*\[[^\]]+\.vcxproj\]$', '') } |
+            Sort-Object -Unique | Select-Object -First 10 |
+            ForEach-Object { Write-Host "::warning::$_" }
+          exit $code
+
+      - name: Unit tests
+        shell: pwsh
+        working-directory: build-msvc
+        run: |
+          ctest -C Release --output-on-failure 2>&1 | Tee-Object ctest.log
+          $code = $LASTEXITCODE
+          Select-String -Path ctest.log -Pattern '\*\*\*Failed|\(Failed\)|Exception' |
+            Select-Object -First 10 | ForEach-Object { Write-Host "::error::$($_.Line.Trim())" }
+          exit $code
+
+      - name: Smoke-run the MSVC binary
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem build-msvc -Recurse -Filter sysrecon.exe | Select-Object -First 1
+          & $exe.FullName --help > help.txt
+          if ($LASTEXITCODE -ne 0 -or (Get-Item help.txt).Length -eq 0) {
+            Write-Host "::error::MSVC sysrecon.exe --help failed (exit $LASTEXITCODE)"; exit 1
+          }

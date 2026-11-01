@@ -28,10 +28,16 @@ public:
     ~PrivEscAnalyzer();
 
     bool Initialize();
-    // Runs every enabled check. Returns true if the pass completed (findings
-    // are retrieved via GetScanResults()).
+    // Runs every enabled check category. Returns true if the pass completed
+    // (findings are retrieved via GetScanResults()).
     bool RunAllChecks();
     void Cleanup();
+
+    // Per-category toggles, driven from config.json (modules.privesc.*).
+    void SetCheckServices(bool enable)    { check_services_ = enable; }
+    void SetCheckRegistry(bool enable)    { check_registry_ = enable; }
+    void SetCheckFilesystem(bool enable)  { check_filesystem_ = enable; }
+    void SetCheckCredentials(bool enable) { check_credentials_ = enable; }
 
     const std::vector<PrivEscFinding>& GetFindings() const { return findings_; }
     const ScanResults& GetScanResults() const { return scan_results_; }
@@ -61,6 +67,12 @@ private:
     std::vector<PrivEscFinding> findings_;
     ScanResults scan_results_;
     bool initialized_ = false;
+
+    // Category toggles (all on by default; overridden by ApplyConfigToModules).
+    bool check_services_ = true;
+    bool check_registry_ = true;
+    bool check_filesystem_ = true;
+    bool check_credentials_ = true;
 };
 
 } // namespace Modules

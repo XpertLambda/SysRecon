@@ -2,51 +2,35 @@
     "general": {
         "verbose_output": false,
         "stealth_mode": false,
-        "require_admin": true,
-        "max_threads": 4,
-        "timeout_seconds": 300
+        "require_admin": true
     },
     "modules": {
         "accounts": {
             "enabled": true,
-            "enumerate_groups": true,
-            "check_passwords": false,
-            "analyze_permissions": true
+            "enumerate_groups": true
         },
         "services": {
-            "enabled": true,
-            "analyze_startup": true,
-            "check_dependencies": true,
-            "verify_signatures": false
+            "enabled": true
         },
         "processes": {
             "enabled": true,
-            "analyze_memory": false,
-            "check_dlls": true,
-            "detect_injection": true
+            "check_dlls": true
         },
         "network": {
             "enabled": true,
             "scan_listening_ports": true,
-            "analyze_connections": true,
-            "resolve_hostnames": false
+            "analyze_connections": true
         },
         "registry": {
             "enabled": true,
             "scan_startup_keys": true,
             "analyze_policies": true,
             "check_permissions": true,
-            "custom_keys": [
-                "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
-                "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce",
-                "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
-                "HKLM\\System\\CurrentControlSet\\Services"
-            ]
+            "custom_keys": []
         },
         "memory": {
             "enabled": false,
             "create_dumps": false,
-            "analyze_heap": false,
             "scan_for_malware": true,
             "max_dump_size_mb": 100
         },
@@ -62,14 +46,6 @@
         "output_directory": "./reports",
         "generate_json": true,
         "generate_csv": true,
-        "generate_html": true,
-        "generate_pdf": false,
-        "compress_output": true
-    },
-    "security": {
-        "encrypt_output": false,
-        "encryption_key": "",
-        "sign_reports": false,
-        "signing_cert": ""
+        "generate_html": true
     }
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../../sysrecon.h"
+#include <set>
 
 namespace SysRecon {
 namespace Modules {
@@ -45,8 +46,10 @@ public:
     bool Initialize();
     bool EnumerateUsers();
     bool EnumerateGroups();
-    bool AnalyzePermissions();
-    bool CheckPasswordPolicies();
+    // Local password and lockout policy (NetUserModalsGet). Feeds the same
+    // CIS L1 controls that hardening/Invoke-SysReconHardening.ps1 applies,
+    // so audit -> remediate -> re-audit actually closes.
+    bool AnalyzePasswordPolicy();
     void Cleanup();
     
     // Results access
@@ -56,8 +59,6 @@ public:
     
     // Configuration
     void SetEnumerateGroups(bool enable) { enumerate_groups_ = enable; }
-    void SetAnalyzePermissions(bool enable) { analyze_permissions_ = enable; }
-    void SetCheckPasswords(bool enable) { check_passwords_ = enable; }
     
     // Analysis methods
     bool IsUserAdmin(const String& username);
@@ -75,25 +76,24 @@ private:
     bool EnumerateDomainGroups();
     bool GetUserDetails(const String& username, UserAccount& user);
     bool GetGroupMembers(const String& group_name, StringVector& members);
-    bool GetUserPrivileges(const String& username, StringVector& privileges);
     
     // Analysis helpers
     void AnalyzeUserAccount(const UserAccount& user);
-    void AnalyzeGroupMembership(const GroupInfo& group);
-    void CheckPasswordPolicy();
-    void CheckAccountLockoutPolicy();
-    void CheckUserRights();
     
+    // Membership of BUILTIN\Administrators, resolved once by well-known SID
+    // (the group's *name* is localised: "Administratoren", "Administrateurs").
+    void LoadAdministratorMembers();
+    bool IsAdministratorMember(const String& username) const;
+
     // Utility methods
     String SidToString(PSID sid);
-    bool GetAccountSid(const String& account_name, String& sid);
     DWORD GetUserFlags(const String& username);
     std::chrono::system_clock::time_point FileTimeToSystemTime(const FILETIME& ft);
     
     // Configuration
     bool enumerate_groups_;
-    bool analyze_permissions_;
-    bool check_passwords_;
+    std::set<String> admin_members_;  // Lower-cased, both "name" and "domain\\name".
+    bool admin_members_loaded_ = false;
     
     // Data storage
     std::vector<UserAccount> users_;

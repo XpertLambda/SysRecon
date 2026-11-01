@@ -50,18 +50,13 @@ echo.
 
 REM Check if required files exist
 if not exist "config.json" (
-    echo [WARNING] config.json not found - creating default
-    echo { > config.json
-    echo   "verbose": false, >> config.json
-    echo   "output_dir": "./reports", >> config.json
-    echo   "report_format": "all" >> config.json
-    echo } >> config.json
+    echo [ERROR] config.json not found ^(tracked in git; restore with: git checkout -- config.json^)
+    exit /b 1
 )
 
 if not exist "LICENSE" (
-    echo [WARNING] LICENSE file not found - creating placeholder
-    echo Proprietary Software - All Rights Reserved > LICENSE
-    echo Copyright (c) 2025 XpertLambda >> LICENSE
+    echo [ERROR] LICENSE not found ^(tracked in git; restore with: git checkout -- LICENSE^)
+    exit /b 1
 )
 
 if not exist "README.md" (
@@ -88,7 +83,8 @@ if %ERRORLEVEL% EQU 0 (
     echo Installer Build Successful!
     echo ============================================
     echo.
-    echo Installer created: SysRecon-Setup-1.0.0.exe
+    for /f "tokens=3 delims= " %%v in ('findstr /b "!define PRODUCT_VERSION" installer.nsi') do set SETUP_VERSION=%%~v
+    echo Installer created: SysRecon-Setup-%SETUP_VERSION%.exe
     echo.
     echo You can now distribute this installer to users.
     echo The installer includes:

@@ -1,4 +1,5 @@
 #include "../../include/core/logger.h"
+#include "../../include/core/utils.h"
 #include <iostream>
 #include <iomanip>
 #include <sstream>
@@ -33,12 +34,9 @@ void Logger::SetLogFile(const String& filename) {
         log_file_.close();
     }
     
-    std::string narrowFilename;
-    for (wchar_t c : filename) {
-        narrowFilename += static_cast<char>(c);
-    }
-    
-    log_file_.open(narrowFilename, std::ios::app);
+    // Open by wide path: truncating each wchar_t to char mangled any
+    // non-ASCII path component.
+    log_file_.open(std::filesystem::path(filename), std::ios::app);
     file_output_ = log_file_.is_open();
 }
 
@@ -102,12 +100,7 @@ void Logger::Rotate() {
     if (log_file_.is_open()) {
         log_file_.close();
         
-        std::string narrowFilename;
-        for (wchar_t c : log_filename_) {
-            narrowFilename += static_cast<char>(c);
-        }
-        
-        log_file_.open(narrowFilename, std::ios::app);
+        log_file_.open(std::filesystem::path(log_filename_), std::ios::app);
     }
 }
 
@@ -115,7 +108,22 @@ bool Logger::IsEnabled(LogLevel level) const {
     return level >= min_log_level_;
 }
 
+LogLevel Logger::GetLogLevel() const {
+    return min_log_level_;
+}
+
+void Logger::CloseLogFile() {
+    std::lock_guard<std::mutex> lock(log_mutex_);
+    if (log_file_.is_open()) {
+        log_file_.close();
+    }
+    file_output_ = false;
+}
+
 size_t Logger::GetLogCount(LogLevel level) const {
+    // log_counts_ is written by Log() under this mutex; reading it unlocked
+    // was a data race.
+    std::lock_guard<std::mutex> lock(log_mutex_);
     auto it = log_counts_.find(level);
     return (it != log_counts_.end()) ? it->second : 0;
 }
@@ -133,11 +141,9 @@ void Logger::WriteLog(LogLevel level, const String& message) {
     }
     
     if (file_output_ && log_file_.is_open()) {
-        std::string narrowMessage;
-        for (wchar_t c : formattedMessage) {
-            narrowMessage += static_cast<char>(c);
-        }
-        log_file_ << narrowMessage << std::endl;
+        // static_cast<char> per character silently mangled every non-ASCII
+        // registry path, username and service name written to the log.
+        log_file_ << Utils::WideToUtf8(formattedMessage) << std::endl;
     }
 }
 
@@ -153,8 +159,12 @@ String Logger::GetTimestamp() {
     auto now = std::chrono::system_clock::now();
     auto time_t = std::chrono::system_clock::to_time_t(now);
     
+    std::tm tm_buf{};
+    // std::localtime returns a pointer to a shared static tm.
+    Utils::ToLocalTime(time_t, tm_buf);
+
     std::wstringstream ss;
-    ss << std::put_time(std::localtime(&time_t), L"%Y-%m-%d %H:%M:%S");
+    ss << std::put_time(&tm_buf, timestamp_format_.c_str());
     return ss.str();
 }
 

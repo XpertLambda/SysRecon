@@ -32,10 +32,10 @@ void PrivEscAnalyzer::Record(const PrivEscFinding& finding) {
     result.reference = finding.reference;
     result.timestamp = std::chrono::system_clock::now();
 
-    if (!finding.category.empty())    result.details[L"Category"] = finding.category;
-    if (!finding.evidence.empty())    result.details[L"Evidence"] = finding.evidence;
-    if (!finding.remediation.empty()) result.details[L"Remediation"] = finding.remediation;
-    if (!finding.reference.empty())   result.details[L"Reference"] = finding.reference;
+    // remediation/reference are first-class ScanResult fields (rendered
+    // specially by the report), so they are not duplicated into details.
+    if (!finding.category.empty()) result.details[L"Category"] = finding.category;
+    if (!finding.evidence.empty()) result.details[L"Evidence"] = finding.evidence;
 
     scan_results_.push_back(result);
 }
@@ -45,15 +45,23 @@ bool PrivEscAnalyzer::RunAllChecks() {
 
     SYSRECON_LOG_INFO(L"Running privilege-escalation assessment checks...");
 
-    CheckUnquotedServicePaths();
-    CheckWeakServicePermissions();
-    CheckWritableServiceBinaries();
-    CheckAlwaysInstallElevated();
-    CheckWritablePathDirectories();
-    CheckAutorunWritableTargets();
-    CheckStoredCredentials();
-    CheckUacPosture();
-    CheckUnattendedInstallFiles();
+    if (check_services_) {
+        CheckUnquotedServicePaths();
+        CheckWeakServicePermissions();
+        CheckWritableServiceBinaries();
+    }
+    if (check_registry_) {
+        CheckAlwaysInstallElevated();
+        CheckUacPosture();
+    }
+    if (check_filesystem_) {
+        CheckWritablePathDirectories();
+        CheckAutorunWritableTargets();
+    }
+    if (check_credentials_) {
+        CheckStoredCredentials();
+        CheckUnattendedInstallFiles();
+    }
 
     SYSRECON_LOG_INFO(L"Privilege-escalation assessment complete: " +
                       std::to_wstring(findings_.size()) + L" finding(s)");

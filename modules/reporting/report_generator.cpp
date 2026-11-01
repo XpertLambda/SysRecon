@@ -1,7 +1,17 @@
 #include "../../include/modules/reporting/report_generator.h"
+#include "../../include/core/text_utils.h"
 #include <json/json.hpp>
 
 using json = nlohmann::json;
+
+namespace {
+// Every value below originates from the scanned system (registry Run value
+// names, service display names, process names) and is therefore
+// attacker-controlled. Reports must be inert.
+inline SysRecon::String H(const SysRecon::String& v) {
+    return SysRecon::Core::Text::HtmlEscape(v);
+}
+}  // namespace
 
 namespace SysRecon {
 namespace Modules {
@@ -40,8 +50,6 @@ bool ReportGenerator::GenerateReport(ReportFormat format, const String& filename
             return GenerateCSV(filename);
         case ReportFormat::HTML:
             return GenerateHTML(filename);
-        case ReportFormat::PDF:
-            return GeneratePDF(filename);
         default:
             SYSRECON_LOG_ERROR(L"Unsupported report format");
             return false;
@@ -53,35 +61,43 @@ bool ReportGenerator::GenerateJSON(const String& filename) {
     
     try {
         nlohmann::json j;
-
+        
         // Scan information
-        j["scan_info"]["version"] = SYSRECON_VERSION;
+        j["scan_info"]["version"] = Core::Utils::WideToUtf8(SYSRECON_VERSION);
         j["scan_info"]["timestamp"] = Core::Utils::WideToUtf8(Core::Utils::GetCurrentTimestamp());
         j["scan_info"]["hostname"] = Core::Utils::WideToUtf8(Core::Utils::GetComputerName());
         j["scan_info"]["os_version"] = Core::Utils::WideToUtf8(Core::Utils::GetWindowsVersion());
         j["scan_info"]["current_user"] = Core::Utils::WideToUtf8(Core::Utils::GetCurrentUserName());
         j["scan_info"]["total_findings"] = scan_results_.size();
-
+        
         // System information
         j["system_info"]["computer_name"] = Core::Utils::WideToUtf8(system_info_.computer_name);
-        j["system_info"]["domain_name"] = Core::Utils::WideToUtf8(system_info_.domain_name);
         j["system_info"]["os_version"] = Core::Utils::WideToUtf8(system_info_.os_version);
         j["system_info"]["architecture"] = Core::Utils::WideToUtf8(system_info_.architecture);
-        j["system_info"]["processor"] = Core::Utils::WideToUtf8(system_info_.processor);
-        j["system_info"]["memory_total"] = Core::Utils::WideToUtf8(system_info_.memory_total);
-        j["system_info"]["uptime"] = Core::Utils::WideToUtf8(system_info_.uptime);
 
+        j["scan_info"]["elevated"] = system_info_.elevated;
+        j["scan_info"]["stealth_mode"] = system_info_.stealth;
+        j["scan_info"]["config"] = Core::Utils::WideToUtf8(system_info_.config_path);
+        j["scan_info"]["modules"] = nlohmann::json::array();
+        for (const auto& m : system_info_.modules) {
+            j["scan_info"]["modules"].push_back(Core::Utils::WideToUtf8(m));
+        }
+        j["incomplete_checks"] = nlohmann::json::array();
+        for (const auto& note : incomplete_checks_) {
+            j["incomplete_checks"].push_back(Core::Utils::WideToUtf8(note));
+        }
+        
         // Scan results
         j["results"] = nlohmann::json::array();
-
+        
         int critical_count = 0, high_count = 0, medium_count = 0, low_count = 0;
-
+        
         for (const auto& result : scan_results_) {
             nlohmann::json result_obj;
             result_obj["module"] = Core::Utils::WideToUtf8(result.module_name);
             result_obj["item"] = Core::Utils::WideToUtf8(result.item_name);
             result_obj["description"] = Core::Utils::WideToUtf8(result.description);
-
+            
             // Risk level
             String risk_str;
             switch (result.risk_level) {
@@ -92,40 +108,30 @@ bool ReportGenerator::GenerateJSON(const String& filename) {
             }
             result_obj["risk_level"] = Core::Utils::WideToUtf8(risk_str);
 
-            // Phase 2: first-class remediation / reference for tooling.
             if (!result.remediation.empty())
                 result_obj["remediation"] = Core::Utils::WideToUtf8(result.remediation);
             if (!result.reference.empty())
                 result_obj["reference"] = Core::Utils::WideToUtf8(result.reference);
-
+            
             // Details
             result_obj["details"] = nlohmann::json::object();
             for (const auto& detail : result.details) {
                 result_obj["details"][Core::Utils::WideToUtf8(detail.first)] = Core::Utils::WideToUtf8(detail.second);
             }
-
+            
             j["results"].push_back(result_obj);
         }
-
-        // Summary + weighted risk score (0-100) and rating.
-        int risk_score = critical_count * 25 + high_count * 10 + medium_count * 4 + low_count;
-        if (risk_score > 100) risk_score = 100;
-        std::string rating = "Minimal";
-        if (critical_count > 0 || risk_score >= 60)      rating = "Critical";
-        else if (high_count > 0 || risk_score >= 30)     rating = "High";
-        else if (medium_count > 0 || risk_score >= 10)   rating = "Moderate";
-        else if (risk_score > 0)                         rating = "Low";
-
+        
+        // Summary
         j["summary"]["critical"] = critical_count;
         j["summary"]["high"] = high_count;
         j["summary"]["medium"] = medium_count;
         j["summary"]["low"] = low_count;
         j["summary"]["total"] = scan_results_.size();
-        j["summary"]["risk_score"] = risk_score;
-        j["summary"]["rating"] = rating;
         
-        // Write to file
-        std::ofstream file(Core::Utils::WideToUtf8(filename));
+        // Wide path: narrowing to the ANSI codepage made any non-ASCII output
+        // directory fail to open. std::filesystem::path preserves it.
+        std::ofstream file{std::filesystem::path(filename)};
         if (!file.is_open()) {
             SYSRECON_LOG_ERROR(L"Failed to create report file");
             return false;
@@ -146,30 +152,32 @@ bool ReportGenerator::GenerateJSON(const String& filename) {
 bool ReportGenerator::GenerateCSV(const String& filename) {
     SYSRECON_LOG_INFO(L"Generating CSV report...");
     
-    std::ofstream file(Core::Utils::WideToUtf8(filename));
+    // Wide path: narrowing to the ANSI codepage made any non-ASCII output
+    // directory fail to open. std::filesystem::path preserves it.
+    std::ofstream file{std::filesystem::path(filename)};
     if (!file.is_open()) {
         SYSRECON_LOG_ERROR(L"Failed to create CSV file");
         return false;
     }
     
-    // Escapes embedded double-quotes so fields stay valid CSV.
-    auto csv = [](const String& w) {
-        std::string s = Core::Utils::WideToUtf8(w);
-        std::string out;
-        out.reserve(s.size());
-        for (char c : s) { if (c == '"') out += '"'; out += c; }
-        return out;
-    };
+    // BOM, so Excel reads the file as UTF-8 rather than the ANSI codepage.
+    file << "\xEF\xBB\xBF";
 
     // Header
     file << "Module,Item,Risk Level,Description,Remediation,Reference,Details\n";
 
-    // Results
-    for (const auto& result : scan_results_) {
-        file << "\"" << csv(result.module_name) << "\",";
-        file << "\"" << csv(result.item_name) << "\",";
+    // Every field goes through CsvEscape: it doubles embedded quotes per
+    // RFC 4180 (service binary paths routinely contain them) and neutralises
+    // spreadsheet formula injection, so naming a service "=cmd|'/c calc'!A1"
+    // cannot execute code when the analyst opens the report.
+    auto csv = [](const String& v) {
+        return Core::Utils::WideToUtf8(Core::Text::CsvEscape(v));
+    };
 
-        // Risk level
+    for (const auto& result : scan_results_) {
+        file << csv(result.module_name) << ",";
+        file << csv(result.item_name) << ",";
+
         String risk_str;
         switch (result.risk_level) {
             case SecurityLevel::Critical: risk_str = L"Critical"; break;
@@ -177,19 +185,23 @@ bool ReportGenerator::GenerateCSV(const String& filename) {
             case SecurityLevel::Medium: risk_str = L"Medium"; break;
             case SecurityLevel::Low: risk_str = L"Low"; break;
         }
-        file << "\"" << csv(risk_str) << "\",";
-        file << "\"" << csv(result.description) << "\",";
-        file << "\"" << csv(result.remediation) << "\",";
-        file << "\"" << csv(result.reference) << "\",";
+        file << csv(risk_str) << ",";
+        file << csv(result.description) << ",";
+        file << csv(result.remediation) << ",";
+        file << csv(result.reference) << ",";
 
-        // Concatenate details
-        std::string details_str;
+        String details_str;
         for (const auto& detail : result.details) {
-            if (detail.first == L"Remediation" || detail.first == L"Reference") continue;
-            if (!details_str.empty()) details_str += "; ";
-            details_str += csv(detail.first) + ": " + csv(detail.second);
+            if (!details_str.empty()) details_str += L"; ";
+            details_str += detail.first + L": " + detail.second;
         }
-        file << "\"" << details_str << "\"\n";
+        file << csv(details_str) << "\n";
+    }
+
+    // Incomplete checks as rows of their own, so a spreadsheet user sees them.
+    for (const auto& note : incomplete_checks_) {
+        file << csv(L"SysRecon") << "," << csv(L"Incomplete check") << ","
+             << csv(L"Info") << "," << csv(note) << "," << csv(L"") << "\n";
     }
     
     file.close();
@@ -223,30 +235,38 @@ bool ReportGenerator::GenerateHTML(const String& filename) {
     html << L"table { width: 100%; border-collapse: collapse; margin: 20px 0; background: white; }\n";
     html << L"th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }\n";
     html << L"th { background-color: #007bff; color: white; }\n";
-    html << L".details { margin-top: 10px; padding: 10px; background: #f8f9fa; border-radius: 3px; }\n";
+    html << L".details { margin-top: 10px; padding: 10px; background: #f8f9fa; border-radius: 3px; word-break: break-all; }\n";
     html << L".remediation { margin-top: 10px; padding: 10px; background: #e7f5e9; border-left: 4px solid #28a745; border-radius: 3px; }\n";
     html << L".reference { margin-top: 8px; color: #555; font-size: 0.9em; }\n";
+    html << L".info-box.warning { border-left: 4px solid #fd7e14; }\n";
     html << L"</style>\n";
     html << L"</head>\n<body>\n";
     
     // Header
     html << L"<h1>🔒 SysRecon Security Assessment Report</h1>\n";
     html << L"<div class=\"info-box\">\n";
-    html << L"<p><strong>Generated:</strong> " << Core::Utils::GetCurrentTimestamp() << L"</p>\n";
-    html << L"<p><strong>SysRecon Version:</strong> " << Core::Utils::Utf8ToWide(SYSRECON_VERSION) << L"</p>\n";
-    html << L"<p><strong>System:</strong> " << Core::Utils::GetComputerName();
-    if (!system_info_.domain_name.empty()) html << L" (" << system_info_.domain_name << L")";
-    html << L"</p>\n";
-    html << L"<p><strong>OS Version:</strong> " << Core::Utils::GetWindowsVersion() << L"</p>\n";
-    if (!system_info_.processor.empty())
-        html << L"<p><strong>Processor:</strong> " << system_info_.processor << L"</p>\n";
-    if (!system_info_.memory_total.empty())
-        html << L"<p><strong>Total Memory:</strong> " << system_info_.memory_total << L"</p>\n";
-    if (!system_info_.uptime.empty())
-        html << L"<p><strong>Uptime:</strong> " << system_info_.uptime << L"</p>\n";
-    html << L"<p><strong>User:</strong> " << Core::Utils::GetCurrentUserName() << L"</p>\n";
+    // Header values come from the host too (computer and user names are
+    // configurable), so they are escaped like everything else.
+    html << L"<p><strong>Generated:</strong> " << H(Core::Utils::GetCurrentTimestamp()) << L"</p>\n";
+    html << L"<p><strong>System:</strong> " << H(Core::Utils::GetComputerName()) << L"</p>\n";
+    html << L"<p><strong>OS Version:</strong> " << H(Core::Utils::GetWindowsVersion()) << L"</p>\n";
+    html << L"<p><strong>User:</strong> " << H(Core::Utils::GetCurrentUserName()) << L"</p>\n";
+    html << L"<p><strong>Elevated:</strong> " << (system_info_.elevated ? L"Yes" : L"No") << L"</p>\n";
+    html << L"<p><strong>Modules:</strong> " << H(Core::Utils::Join(system_info_.modules, L", "))
+         << (system_info_.stealth ? L" (stealth mode)" : L"") << L"</p>\n";
+    html << L"<p><strong>Configuration:</strong> " << H(system_info_.config_path) << L"</p>\n";
     html << L"<p><strong>Total Findings:</strong> " << scan_results_.size() << L"</p>\n";
     html << L"</div>\n";
+
+    if (!incomplete_checks_.empty()) {
+        html << L"<h2>Incomplete Checks</h2>\n";
+        html << L"<div class=\"info-box warning\">\n<p>These checks did not complete; "
+                L"the absence of findings in these areas is not evidence of safety.</p>\n<ul>\n";
+        for (const auto& note : incomplete_checks_) {
+            html << L"<li>" << H(note) << L"</li>\n";
+        }
+        html << L"</ul>\n</div>\n";
+    }
     
     // Count findings by severity
     int critical = 0, high = 0, medium = 0, low = 0;
@@ -259,38 +279,19 @@ bool ReportGenerator::GenerateHTML(const String& filename) {
         }
     }
     
-    // Executive summary + weighted risk score / rating.
-    int risk_score = critical * 25 + high * 10 + medium * 4 + low;
-    if (risk_score > 100) risk_score = 100;
-    String rating = L"Minimal"; String rating_class = L"low";
-    if (critical > 0 || risk_score >= 60)      { rating = L"Critical"; rating_class = L"critical"; }
-    else if (high > 0 || risk_score >= 30)     { rating = L"High"; rating_class = L"high"; }
-    else if (medium > 0 || risk_score >= 10)   { rating = L"Moderate"; rating_class = L"medium"; }
-    else if (risk_score > 0)                   { rating = L"Low"; rating_class = L"low"; }
-
-    html << L"<h2>📊 Executive Summary</h2>\n";
+    // Summary
+    html << L"<h2>📊 Summary</h2>\n";
     html << L"<div class=\"info-box\">\n";
-    html << L"<p><strong>Overall Risk Rating:</strong> <span class=\"risk-" << rating_class
-         << L"\">" << rating << L"</span> (score " << risk_score << L"/100)</p>\n";
-    html << L"<table>\n<tr><th>Severity</th><th>Count</th></tr>\n";
-    html << L"<tr><td><span class=\"risk-critical\">Critical</span></td><td>" << critical << L"</td></tr>\n";
-    html << L"<tr><td><span class=\"risk-high\">High</span></td><td>" << high << L"</td></tr>\n";
-    html << L"<tr><td><span class=\"risk-medium\">Medium</span></td><td>" << medium << L"</td></tr>\n";
-    html << L"<tr><td><span class=\"risk-low\">Low</span></td><td>" << low << L"</td></tr>\n";
-    html << L"</table>\n</div>\n";
-
-    // Findings, ordered most-severe first so remediation effort can be triaged.
+    html << L"<p><span class=\"risk-critical\">Critical:</span> " << critical << L"</p>\n";
+    html << L"<p><span class=\"risk-high\">High:</span> " << high << L"</p>\n";
+    html << L"<p><span class=\"risk-medium\">Medium:</span> " << medium << L"</p>\n";
+    html << L"<p><span class=\"risk-low\">Low:</span> " << low << L"</p>\n";
+    html << L"</div>\n";
+    
+    // Findings
     html << L"<h2>🔍 Detailed Findings</h2>\n";
-
-    std::vector<const ScanResult*> ordered;
-    ordered.reserve(scan_results_.size());
-    for (const auto& r : scan_results_) ordered.push_back(&r);
-    std::sort(ordered.begin(), ordered.end(), [](const ScanResult* a, const ScanResult* b) {
-        return static_cast<int>(a->risk_level) > static_cast<int>(b->risk_level);
-    });
-
-    for (const auto* resultPtr : ordered) {
-        const ScanResult& result = *resultPtr;
+    
+    for (const auto& result : scan_results_) {
         String risk_class, risk_str;
         switch (result.risk_level) {
             case SecurityLevel::Critical: risk_class = L"critical"; risk_str = L"Critical"; break;
@@ -298,39 +299,40 @@ bool ReportGenerator::GenerateHTML(const String& filename) {
             case SecurityLevel::Medium: risk_class = L"medium"; risk_str = L"Medium"; break;
             case SecurityLevel::Low: risk_class = L"low"; risk_str = L"Low"; break;
         }
-
+        
+        // risk_class/risk_str are fixed literals from the switch above and are
+        // safe; everything else is untrusted and must be escaped.
         html << L"<div class=\"finding " << risk_class << L"\">\n";
-        html << L"<h3>" << result.module_name << L" - " << result.item_name << L"</h3>\n";
+        html << L"<h3>" << H(result.module_name) << L" - " << H(result.item_name) << L"</h3>\n";
         html << L"<p><strong>Risk:</strong> <span class=\"risk-" << risk_class << L"\">" << risk_str << L"</span></p>\n";
-        html << L"<p>" << result.description << L"</p>\n";
+        html << L"<p>" << H(result.description) << L"</p>\n";
 
-        // Details (remediation/reference are rendered separately below).
-        bool has_detail = false;
-        for (const auto& detail : result.details) {
-            if (detail.first == L"Remediation" || detail.first == L"Reference") continue;
-            if (!has_detail) { html << L"<div class=\"details\">\n<strong>Details:</strong><br>\n"; has_detail = true; }
-            html << L"<strong>" << detail.first << L":</strong> " << detail.second << L"<br>\n";
-        }
-        if (has_detail) html << L"</div>\n";
-
-        String remediation = result.remediation;
-        String reference = result.reference;
-        if (remediation.empty()) { auto it = result.details.find(L"Remediation"); if (it != result.details.end()) remediation = it->second; }
-        if (reference.empty())   { auto it = result.details.find(L"Reference");   if (it != result.details.end()) reference = it->second; }
-
-        if (!remediation.empty()) {
-            html << L"<div class=\"remediation\"><strong>✔ Remediation:</strong> " << remediation << L"</div>\n";
-        }
-        if (!reference.empty()) {
-            html << L"<p class=\"reference\"><strong>Reference:</strong> " << reference << L"</p>\n";
+        if (!result.details.empty()) {
+            html << L"<div class=\"details\">\n";
+            html << L"<strong>Details:</strong><br>\n";
+            for (const auto& detail : result.details) {
+                html << L"<strong>" << H(detail.first) << L":</strong> " << H(detail.second) << L"<br>\n";
+            }
+            html << L"</div>\n";
         }
 
+        if (!result.remediation.empty()) {
+            html << L"<div class=\"remediation\"><strong>\u2714 Remediation:</strong> "
+                 << H(result.remediation) << L"</div>\n";
+        }
+        if (!result.reference.empty()) {
+            html << L"<p class=\"reference\"><strong>Reference:</strong> "
+                 << H(result.reference) << L"</p>\n";
+        }
+        
         html << L"</div>\n";
     }
     
     html << L"</body>\n</html>\n";
     
-    std::ofstream file(Core::Utils::WideToUtf8(filename));
+    // Wide path: narrowing to the ANSI codepage made any non-ASCII output
+    // directory fail to open. std::filesystem::path preserves it.
+    std::ofstream file{std::filesystem::path(filename)};
     if (!file.is_open()) {
         SYSRECON_LOG_ERROR(L"Failed to create HTML file");
         return false;
@@ -343,55 +345,12 @@ bool ReportGenerator::GenerateHTML(const String& filename) {
     return true;
 }
 
-bool ReportGenerator::GeneratePDF(const String& filename) {
-    SYSRECON_LOG_WARNING(L"PDF generation not yet implemented");
-    return false;
-}
-
-bool ReportGenerator::GenerateXML(const String& filename) {
-    SYSRECON_LOG_INFO(L"Generating XML report...");
-    return false;
-}
-
-bool ReportGenerator::GenerateText(const String& filename) {
-    SYSRECON_LOG_INFO(L"Generating text report...");
-    return false;
-}
-
 bool ReportGenerator::GenerateAllFormats(const String& base_filename) {
     bool success = true;
     success &= GenerateJSON(base_filename + L".json");
     success &= GenerateCSV(base_filename + L".csv");
     success &= GenerateHTML(base_filename + L".html");
     return success;
-}
-
-bool ReportGenerator::GenerateExecutiveSummary() {
-    return true;
-}
-
-bool ReportGenerator::GenerateFindings() {
-    return true;
-}
-
-bool ReportGenerator::GenerateRecommendations() {
-    return true;
-}
-
-bool ReportGenerator::GenerateSystemInfoSection() {
-    return true;
-}
-
-double ReportGenerator::CalculateRiskScore() {
-    return 0.0;
-}
-
-StringVector ReportGenerator::GetTopRisks(size_t count) {
-    return StringVector();
-}
-
-StringVector ReportGenerator::GenerateRecommendationsList() {
-    return StringVector();
 }
 
 }

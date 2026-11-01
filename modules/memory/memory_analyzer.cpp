@@ -3,11 +3,47 @@
 #include <psapi.h>
 #include <tlhelp32.h>
 #include <winternl.h>
+#include <cstring>
 
 namespace SysRecon {
 namespace Modules {
 
-MemoryAnalyzer::MemoryAnalyzer() 
+namespace {
+
+// Formats an address as real hex. std::to_wstring produces decimal, so
+// L"0x" + std::to_wstring(addr) printed a decimal number behind a hex prefix.
+String FormatHexAddress(DWORD_PTR address) {
+    wchar_t buffer[32];
+    swprintf(buffer, 32, L"0x%016llX", static_cast<unsigned long long>(address));
+    return String(buffer);
+}
+
+// Resolves the full image path for a PID. Whitelist decisions must never be
+// made on a process name alone -- an implant can call itself csrss.exe.
+// Returns an empty string on failure, which callers treat as "not verified".
+String GetProcessImagePath(DWORD process_id) {
+#ifdef _WIN32
+    HANDLE hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, process_id);
+    if (hProcess == NULL) {
+        return String();
+    }
+    WCHAR buffer[MAX_PATH] = {0};
+    DWORD size = MAX_PATH;
+    String path;
+    if (QueryFullProcessImageNameW(hProcess, 0, buffer, &size)) {
+        path.assign(buffer, size);
+    }
+    CloseHandle(hProcess);
+    return path;
+#else
+    (void)process_id;
+    return String();
+#endif
+}
+
+}  // namespace
+
+MemoryAnalyzer::MemoryAnalyzer()
     : create_dumps_(false)
     , analyze_heap_(false)
     , scan_for_malware_(true)
@@ -57,9 +93,10 @@ bool MemoryAnalyzer::AnalyzeProcessMemory(DWORD process_id) {
     if (GetModuleBaseNameW(hProcess, NULL, process_name, MAX_PATH)) {
         memory_info.process_name = process_name;
     }
+    memory_info.image_path = GetProcessImagePath(process_id);
     
     // Get memory statistics
-    PROCESS_MEMORY_COUNTERS_EX pmc = {0};
+    PROCESS_MEMORY_COUNTERS_EX pmc = {};
     pmc.cb = sizeof(pmc);
     if (GetProcessMemoryInfo(hProcess, (PROCESS_MEMORY_COUNTERS*)&pmc, sizeof(pmc))) {
         memory_info.working_set = pmc.WorkingSetSize;
@@ -76,7 +113,8 @@ bool MemoryAnalyzer::AnalyzeProcessMemory(DWORD process_id) {
     for (const auto& region : memory_info.regions) {
         if (region.is_executable && region.is_writable) {
             // Check if this is a system process before flagging RWX regions
-            bool is_system = Core::SystemWhitelist::Instance().IsSystemProcess(memory_info.process_name);
+            bool is_system = Core::SystemWhitelist::Instance()
+                                 .IsSystemProcess(memory_info.process_name, memory_info.image_path);
             
             // Only flag RWX regions as high risk for non-system processes
             // or if the region is unusually large
@@ -90,8 +128,8 @@ bool MemoryAnalyzer::AnalyzeProcessMemory(DWORD process_id) {
                 region_risk = SecurityLevel::High;
             }
             
-            String suspicious = L"RWX (Read-Write-Execute) memory region at 0x" + 
-                              std::to_wstring(region.base_address) + 
+            String suspicious = L"RWX (Read-Write-Execute) memory region at " +
+                              FormatHexAddress(region.base_address) +
                               L" (size: " + std::to_wstring(region.region_size / 1024) + L" KB)";
             
             if (region_risk >= SecurityLevel::Medium) {
@@ -102,7 +140,7 @@ bool MemoryAnalyzer::AnalyzeProcessMemory(DWORD process_id) {
                 result.item_name = memory_info.process_name;
                 result.description = suspicious;
                 result.risk_level = region_risk;
-                result.details[L"address"] = std::to_wstring(region.base_address);
+                result.details[L"address"] = FormatHexAddress(region.base_address);
                 result.details[L"size"] = std::to_wstring(region.region_size);
                 result.details[L"size_kb"] = std::to_wstring(region.region_size / 1024);
                 result.details[L"protection"] = region.protection_string;
@@ -144,7 +182,7 @@ bool MemoryAnalyzer::EnumerateProcessMemory(DWORD process_id, std::vector<Memory
     DWORD_PTR max_address = (DWORD_PTR)sys_info.lpMaximumApplicationAddress;
     
     while (address < max_address) {
-        MEMORY_BASIC_INFORMATION mbi = {0};
+        MEMORY_BASIC_INFORMATION mbi = {};
         if (VirtualQueryEx(hProcess, (LPCVOID)address, &mbi, sizeof(mbi)) == 0) {
             break;
         }
@@ -198,26 +236,55 @@ bool MemoryAnalyzer::CreateMemoryDump(DWORD process_id, const String& output_pat
 
 bool MemoryAnalyzer::CreateMiniDump(DWORD process_id, const String& output_path) {
 #ifdef _WIN32
-    HANDLE hProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, process_id);
+    // MiniDumpWriteDump needs both of these rights; the previous
+    // PROCESS_QUERY_INFORMATION | PROCESS_VM_READ was not sufficient.
+    HANDLE hProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
+                                  FALSE, process_id);
     if (hProcess == NULL) {
+        SYSRECON_LOG_ERROR(L"Dump: cannot open PID " + std::to_wstring(process_id) +
+                           L": " + Core::Utils::GetLastErrorString());
         return false;
     }
-    
-    HANDLE hFile = CreateFileW(output_path.c_str(), GENERIC_WRITE, 0, NULL, 
+
+    HANDLE hFile = CreateFileW(output_path.c_str(), GENERIC_WRITE, 0, NULL,
                                CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE) {
+        SYSRECON_LOG_ERROR(L"Dump: cannot create " + output_path + L": " +
+                           Core::Utils::GetLastErrorString());
         CloseHandle(hProcess);
         return false;
     }
-    
-    // Note: MiniDumpWriteDump requires dbghelp.dll
-    // For cross-compilation, we'll just create a simple dump
-    SYSRECON_LOG_INFO(L"Memory dump created: " + output_path);
-    
+
+    // Actually write the dump. This previously logged "Memory dump created"
+    // and returned true having written zero bytes -- a forensics tool must
+    // never report a successful capture it did not perform.
+    MINIDUMP_EXCEPTION_INFORMATION* exception_info = nullptr;
+    const MINIDUMP_TYPE dump_type = static_cast<MINIDUMP_TYPE>(
+        MiniDumpWithFullMemory | MiniDumpWithHandleData | MiniDumpWithThreadInfo);
+
+    BOOL written = MiniDumpWriteDump(hProcess, process_id, hFile, dump_type,
+                                     exception_info, NULL, NULL);
+    if (!written) {
+        const String err = Core::Utils::GetLastErrorString();
+        CloseHandle(hFile);
+        CloseHandle(hProcess);
+        DeleteFileW(output_path.c_str());  // Do not leave a truncated dump behind.
+        SYSRECON_LOG_ERROR(L"Dump: MiniDumpWriteDump failed for PID " +
+                           std::to_wstring(process_id) + L": " + err);
+        return false;
+    }
+
+    LARGE_INTEGER size = {};
+    GetFileSizeEx(hFile, &size);
+
     CloseHandle(hFile);
     CloseHandle(hProcess);
+
+    SYSRECON_LOG_INFO(L"Memory dump written: " + output_path + L" (" +
+                      std::to_wstring(size.QuadPart) + L" bytes)");
     return true;
 #else
+    (void)process_id; (void)output_path;
     return false;
 #endif
 }
@@ -247,24 +314,25 @@ bool MemoryAnalyzer::DetectInjection() {
         return false;
     }
     
-    PROCESSENTRY32W pe32 = {0};
+    PROCESSENTRY32W pe32 = {};
     pe32.dwSize = sizeof(pe32);
     
     if (Process32FirstW(hSnapshot, &pe32)) {
         do {
-            // Skip system processes to reduce false positives
+            // Skip verified system processes to reduce false positives. The
+            // whitelist is consulted BEFORE the address-space walk: that walk is
+            // expensive, and running it against lsass.exe only to discard the
+            // result is the canonical credential-dumping signature.
             String proc_name = pe32.szExeFile;
-            bool is_system = Core::SystemWhitelist::Instance().IsSystemProcess(proc_name);
-            
-            // Check for DLL injection (but be more careful with system processes)
+            String proc_path = GetProcessImagePath(pe32.th32ProcessID);
+            bool is_system = Core::SystemWhitelist::Instance()
+                                 .IsSystemProcess(proc_name, proc_path);
+            if (is_system) {
+                continue;
+            }
+
             if (DetectDllInjection(pe32.th32ProcessID)) {
-                // Additional validation for system processes
-                if (is_system) {
-                    // System processes often have private executable memory for JIT, etc.
-                    // Only flag if it's truly suspicious
-                    continue;
-                }
-                
+
                 InjectionIndicator indicator;
                 indicator.type = L"Possible DLL Injection";
                 indicator.description = L"Suspicious unbacked executable memory in process: " + String(pe32.szExeFile);
@@ -336,24 +404,44 @@ bool MemoryAnalyzer::DetectDllInjection(DWORD process_id) {
     DWORD_PTR max_address = (DWORD_PTR)sys_info.lpMaximumApplicationAddress;
     
     bool injection_detected = false;
-    
+
     while (address < max_address) {
-        MEMORY_BASIC_INFORMATION mbi = {0};
+        MEMORY_BASIC_INFORMATION mbi = {};
         if (VirtualQueryEx(hProcess, (LPCVOID)address, &mbi, sizeof(mbi)) == 0) {
             break;
         }
-        
-        // Look for executable regions that are MEM_PRIVATE (not backed by file)
-        if (mbi.State == MEM_COMMIT && 
+
+        // Unbacked executable memory alone is NOT evidence of injection: every
+        // .NET, Java and JavaScript process JITs code into private executable
+        // pages, so flagging that produced a finding for most of the machine.
+        // Require an actual PE image mapped into private memory, which is the
+        // signature of a reflectively loaded / manually mapped module.
+        if (mbi.State == MEM_COMMIT &&
             mbi.Type == MEM_PRIVATE &&
             IsExecutableRegion(mbi.Protect)) {
-            injection_detected = true;
+
+            // Only the header is needed to decide, so read a page at most.
+            const SIZE_T probe = mbi.RegionSize < 0x1000 ? mbi.RegionSize : 0x1000;
+            ByteVector header(probe);
+            SIZE_T bytes_read = 0;
+            if (ReadProcessMemory(hProcess, mbi.BaseAddress, header.data(), probe, &bytes_read)
+                && bytes_read > 0) {
+                header.resize(bytes_read);
+                if (DetectPeHeader(header)) {
+                    injection_detected = true;
+                    break;
+                }
+            }
+        }
+
+        // Guard against a zero RegionSize stalling the walk.
+        DWORD_PTR next = (DWORD_PTR)mbi.BaseAddress + mbi.RegionSize;
+        if (next <= address) {
             break;
         }
-        
-        address = (DWORD_PTR)mbi.BaseAddress + mbi.RegionSize;
+        address = next;
     }
-    
+
     CloseHandle(hProcess);
     return injection_detected;
 #else
@@ -363,40 +451,47 @@ bool MemoryAnalyzer::DetectDllInjection(DWORD process_id) {
 
 bool MemoryAnalyzer::DetectProcessHollowing(DWORD process_id) {
 #ifdef _WIN32
-    // Process hollowing detection is complex and requires checking:
-    // 1. PEB (Process Environment Block)
-    // 2. Entry point vs base address
-    // 3. Memory contents vs on-disk image
-    
-    // Simplified check: look for mismatched module base addresses
+    // Process hollowing (T1055.012): the loader maps an executable's main image
+    // as MEM_IMAGE, backed by the file on disk. If a process was hollowed --
+    // its image unmapped and replaced with attacker code -- the region at the
+    // image base is MEM_PRIVATE instead, because it no longer corresponds to
+    // any file.
+    //
+    // This previously queried address 0, which is always free/reserved and
+    // never MEM_PRIVATE+executable, so the check could never return true. The
+    // fix is to query the actual image base.
     HANDLE hProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, process_id);
     if (hProcess == NULL) {
         return false;
     }
-    
-    // Get process image name
-    WCHAR image_path[MAX_PATH] = {0};
-    DWORD size = MAX_PATH;
-    if (QueryFullProcessImageNameW(hProcess, 0, image_path, &size) == 0) {
+
+    // The first module returned by EnumProcessModules is the process image.
+    HMODULE main_module = NULL;
+    DWORD bytes_needed = 0;
+    if (!EnumProcessModules(hProcess, &main_module, sizeof(main_module), &bytes_needed) ||
+        main_module == NULL) {
         CloseHandle(hProcess);
         return false;
     }
-    
-    // Check if the process has suspicious memory characteristics
-    // This is a simplified check - real implementation would be more thorough
-    bool suspicious = false;
-    
-    MEMORY_BASIC_INFORMATION mbi = {0};
-    if (VirtualQueryEx(hProcess, NULL, &mbi, sizeof(mbi)) != 0) {
-        // Check if base region is suspicious
-        if (mbi.Type == MEM_PRIVATE && IsExecutableRegion(mbi.Protect)) {
-            suspicious = true;
-        }
+
+    MODULEINFO mod_info = {};
+    if (!GetModuleInformation(hProcess, main_module, &mod_info, sizeof(mod_info))) {
+        CloseHandle(hProcess);
+        return false;
     }
-    
+
+    MEMORY_BASIC_INFORMATION mbi = {};
+    bool hollowed = false;
+    if (VirtualQueryEx(hProcess, mod_info.lpBaseOfDll, &mbi, sizeof(mbi)) != 0) {
+        // A legitimately loaded image is MEM_IMAGE. MEM_PRIVATE at the image
+        // base means the mapping was replaced.
+        hollowed = (mbi.State == MEM_COMMIT && mbi.Type == MEM_PRIVATE);
+    }
+
     CloseHandle(hProcess);
-    return suspicious;
+    return hollowed;
 #else
+    (void)process_id;
     return false;
 #endif
 }
@@ -446,17 +541,45 @@ bool MemoryAnalyzer::ScanMemoryRegion(HANDLE process_handle, const MemoryRegion&
     }
     
     buffer.resize(bytes_read);
-    
-    // Check for PE header
+
+    // Both detector results were previously discarded into empty if-bodies, so
+    // the malware scan could never report anything. Only unbacked (MEM_PRIVATE)
+    // executable regions are reported: a PE header or shellcode inside a
+    // normal file-backed image is just... the image.
+    const bool unbacked = (region.type == MEM_PRIVATE);
+    if (!unbacked) {
+        return true;
+    }
+
+    auto add_finding = [&](const String& item, const String& description,
+                           const String& technique, SecurityLevel level) {
+        ScanResult result;
+        result.module_name = L"Memory";
+        result.item_name = item;
+        result.description = description;
+        result.details[L"Region Base"] = FormatHexAddress(region.base_address);
+        result.details[L"Region Size"] = std::to_wstring(region.region_size);
+        result.details[L"Protection"] = region.protection_string;
+        result.details[L"Technique"] = technique;
+        result.risk_level = level;
+        result.timestamp = std::chrono::system_clock::now();
+        scan_results_.push_back(result);
+    };
+
     if (DetectPeHeader(buffer)) {
-        // Valid PE in memory
+        // A mapped PE living in private memory is the signature of a
+        // reflectively loaded / manually mapped module.
+        add_finding(L"Unbacked PE image",
+                    L"PE header found in private executable memory (not file-backed)",
+                    L"T1620 Reflective Code Loading",
+                    SecurityLevel::High);
+    } else if (DetectShellcode(buffer)) {
+        add_finding(L"Shellcode pattern",
+                    L"Shellcode-like byte pattern in private executable memory",
+                    L"T1055 Process Injection",
+                    SecurityLevel::Medium);
     }
-    
-    // Check for shellcode patterns
-    if (DetectShellcode(buffer)) {
-        // Possible shellcode detected
-    }
-    
+
     return true;
 #else
     return false;
@@ -478,7 +601,11 @@ bool MemoryAnalyzer::DetectShellcode(const ByteVector& memory_data) {
     };
     
     for (const auto& pattern : shellcode_patterns) {
-        if (pattern.empty() || pattern.size() > memory_data.size()) continue;
+        if (pattern.empty() || memory_data.size() < pattern.size()) {
+            continue;
+        }
+        // Additive bound: `size() - pattern.size()` underflows to SIZE_MAX when
+        // the pattern is longer than the buffer, turning this into an OOB read.
         for (size_t i = 0; i + pattern.size() <= memory_data.size(); i++) {
             bool match = true;
             for (size_t j = 0; j < pattern.size(); j++) {
@@ -506,9 +633,15 @@ bool MemoryAnalyzer::DetectPeHeader(const ByteVector& memory_data) {
     
     // Get PE header offset
     if (memory_data.size() < 0x3C + 4) return false;
-    
-    DWORD pe_offset = *(DWORD*)&memory_data[0x3C];
-    if (pe_offset >= memory_data.size() - 4) return false;
+
+    // memcpy rather than *(DWORD*)&buf[0x3C]: this reads attacker-controlled
+    // process memory at an arbitrary offset, so the cast is both a
+    // strict-aliasing violation and potentially unaligned.
+    DWORD pe_offset = 0;
+    std::memcpy(&pe_offset, &memory_data[0x3C], sizeof(pe_offset));
+
+    // Bound additively so a huge pe_offset cannot wrap the comparison.
+    if (static_cast<size_t>(pe_offset) + 4 > memory_data.size()) return false;
     
     // Check for PE signature "PE\0\0"
     if (memory_data[pe_offset] == 'P' && 
@@ -621,15 +754,6 @@ bool MemoryAnalyzer::IsWritableRegion(DWORD protection) {
 bool MemoryAnalyzer::IsCommittedRegion(DWORD state) {
     return state == MEM_COMMIT;
 }
-
-// Stub implementations for methods not fully implemented yet
-bool MemoryAnalyzer::DetectManualDllLoad(DWORD process_id) { return false; }
-bool MemoryAnalyzer::DetectReflectiveDllLoad(DWORD process_id) { return false; }
-bool MemoryAnalyzer::DetectAtomBombing(DWORD process_id) { return false; }
-StringVector MemoryAnalyzer::FindSuspiciousProcesses() { return StringVector(); }
-StringVector MemoryAnalyzer::FindCodeInjection() { return StringVector(); }
-StringVector MemoryAnalyzer::FindHollowedProcesses() { return StringVector(); }
-StringVector MemoryAnalyzer::FindMalwareSignatures() { return StringVector(); }
 
 void MemoryAnalyzer::Cleanup() {
     process_memory_.clear();

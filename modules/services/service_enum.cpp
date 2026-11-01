@@ -5,10 +5,7 @@ namespace SysRecon {
 namespace Modules {
 
 ServiceEnumerator::ServiceEnumerator() 
-    : analyze_startup_(true)
-    , check_dependencies_(true)
-    , verify_signatures_(false)
-    , initialized_(false)
+    : initialized_(false)
     , scm_handle_(nullptr) {
 }
 
@@ -28,9 +25,18 @@ bool ServiceEnumerator::EnumerateServices() {
     SYSRECON_LOG_INFO(L"Enumerating Windows services...");
     
 #ifdef _WIN32
+    // Re-enumeration must not append to prior results, and must not leak the
+    // previously held SCM handle by overwriting it.
+    services_.clear();
+    if (scm_handle_) {
+        CloseServiceHandle(scm_handle_);
+        scm_handle_ = nullptr;
+    }
+
     scm_handle_ = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_ENUMERATE_SERVICE);
     if (!scm_handle_) {
-        SYSRECON_LOG_ERROR(L"Failed to open Service Control Manager");
+        SYSRECON_LOG_ERROR(L"Failed to open Service Control Manager: " +
+                           Core::Utils::GetLastErrorString());
         return false;
     }
     
@@ -90,14 +96,14 @@ bool ServiceEnumerator::EnumerateServices() {
         // Get detailed service information
         SC_HANDLE serviceHandle = OpenServiceW(scm_handle_, svc.service_name.c_str(), SERVICE_QUERY_CONFIG);
         if (serviceHandle) {
-            DWORD bytesNeeded = 0;
-            QueryServiceConfigW(serviceHandle, nullptr, 0, &bytesNeeded);
+            DWORD configBytesNeeded = 0;
+            QueryServiceConfigW(serviceHandle, nullptr, 0, &configBytesNeeded);
             
-            if (bytesNeeded > 0) {
-                std::vector<BYTE> configBuffer(bytesNeeded);
+            if (configBytesNeeded > 0) {
+                std::vector<BYTE> configBuffer(configBytesNeeded);
                 LPQUERY_SERVICE_CONFIGW config = (LPQUERY_SERVICE_CONFIGW)configBuffer.data();
                 
-                if (QueryServiceConfigW(serviceHandle, config, bytesNeeded, &bytesNeeded)) {
+                if (QueryServiceConfigW(serviceHandle, config, configBytesNeeded, &configBytesNeeded)) {
                     svc.executable_path = config->lpBinaryPathName ? String(config->lpBinaryPathName) : L"";
                     svc.startup_type = StartTypeToString(config->dwStartType);
                     svc.service_account = config->lpServiceStartName ? String(config->lpServiceStartName) : L"";
@@ -121,27 +127,6 @@ bool ServiceEnumerator::EnumerateServices() {
 #endif
 }
 
-bool ServiceEnumerator::AnalyzeStartupServices() {
-    if (!initialized_) return false;
-    
-    SYSRECON_LOG_INFO(L"Analyzing startup services...");
-    return true;
-}
-
-bool ServiceEnumerator::CheckServicePermissions() {
-    if (!initialized_) return false;
-    
-    SYSRECON_LOG_INFO(L"Checking service permissions...");
-    return true;
-}
-
-bool ServiceEnumerator::VerifySignatures() {
-    if (!initialized_) return false;
-    
-    SYSRECON_LOG_INFO(L"Verifying service signatures...");
-    return true;
-}
-
 void ServiceEnumerator::Cleanup() {
     services_.clear();
     scan_results_.clear();
@@ -163,27 +148,24 @@ void ServiceEnumerator::AnalyzeService(const ServiceInfo& svc) {
     result.description = L"Service: " + svc.service_name;
     result.timestamp = std::chrono::system_clock::now();
     
-    // Determine risk level
+    // Determine risk level. A service name alone proves nothing -- suppression
+    // requires the binary to actually live in a system directory.
     SecurityLevel risk = SecurityLevel::Low;
-    bool is_system_service = Core::SystemWhitelist::Instance().IsSystemService(svc.service_name);
-    bool is_system_path = Core::SystemWhitelist::Instance().IsSystemPath(svc.executable_path);
-    
-    // Check for unquoted service paths with spaces
-    if (!svc.executable_path.empty()) {
-        if (svc.executable_path.find(L' ') != String::npos && 
-            svc.executable_path[0] != L'"' &&
-            svc.executable_path.find(L"\\") != String::npos) {
-            
-            // Check if it's actually safe
-            bool is_safe = Core::SystemWhitelist::Instance().IsSafeUnquotedPath(svc.executable_path);
-            
-            if (!is_safe && !is_system_service) {
-                result.details[L"Unquoted Path"] = L"Yes - Potential DLL hijacking risk";
-                risk = std::max(risk, SecurityLevel::High);
-            } else if (!is_safe && is_system_service) {
-                result.details[L"Unquoted Path"] = L"Yes - System service, likely safe";
-                risk = std::max(risk, SecurityLevel::Low);
-            }
+    const String image_path = Core::Text::ExtractExecutablePath(svc.executable_path);
+    bool is_system_service = Core::SystemWhitelist::Instance()
+                                 .IsSystemService(svc.service_name, image_path);
+    bool is_system_path = Core::SystemWhitelist::Instance().IsSystemPath(image_path);
+
+    // Unquoted service path -> the binary before the first space can be
+    // hijacked (C:\Program Files\X\y.exe is beaten by C:\Program.exe).
+    if (!svc.executable_path.empty() &&
+        !Core::SystemWhitelist::Instance().IsSafeUnquotedPath(svc.executable_path)) {
+        if (!is_system_service) {
+            result.details[L"Unquoted Path"] = L"Yes - Potential binary hijacking risk";
+            risk = std::max(risk, SecurityLevel::High);
+        } else {
+            result.details[L"Unquoted Path"] = L"Yes - System service, likely safe";
+            risk = std::max(risk, SecurityLevel::Low);
         }
     }
     

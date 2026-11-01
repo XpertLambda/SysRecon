@@ -1,0 +1,9 @@
+#pragma once
+
+// Generated from cmake/version.h.in -- do not edit.
+// Single source of truth is project(... VERSION ...) in CMakeLists.txt.
+
+#define SYSRECON_VERSION L"@PROJECT_VERSION@"
+#define SYSRECON_VERSION_MAJOR @PROJECT_VERSION_MAJOR@
+#define SYSRECON_VERSION_MINOR @PROJECT_VERSION_MINOR@
+#define SYSRECON_VERSION_PATCH @PROJECT_VERSION_PATCH@

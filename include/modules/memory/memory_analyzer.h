@@ -24,6 +24,9 @@ struct MemoryRegion {
 struct ProcessMemoryInfo {
     DWORD process_id;
     String process_name;
+    // Full path to the running image. Required to tell a genuine
+    // C:\Windows\System32\svchost.exe from an implant of the same name.
+    String image_path;
     SIZE_T working_set;
     SIZE_T page_file_usage;
     SIZE_T virtual_size;
@@ -79,10 +82,6 @@ public:
     SecurityLevel AssessMemoryRisk(const ProcessMemoryInfo& memory_info);
     SecurityLevel AssessRegionRisk(const MemoryRegion& region);
     
-    StringVector FindSuspiciousProcesses();
-    StringVector FindCodeInjection();
-    StringVector FindHollowedProcesses();
-    StringVector FindMalwareSignatures();
     
     // Memory scanning
     bool ScanProcessForPatterns(DWORD process_id, const std::vector<MalwareSignature>& signatures);
@@ -93,38 +92,17 @@ public:
     // Injection detection
     bool DetectDllInjection(DWORD process_id);
     bool DetectProcessHollowing(DWORD process_id);
-    bool DetectManualDllLoad(DWORD process_id);
-    bool DetectReflectiveDllLoad(DWORD process_id);
-    bool DetectAtomBombing(DWORD process_id);
-    
+
 private:
     // Memory enumeration
     bool EnumerateProcessMemory(DWORD process_id, std::vector<MemoryRegion>& regions);
-    bool GetMemoryRegionInfo(HANDLE process_handle, DWORD_PTR address, MemoryRegion& region);
-    bool ReadMemoryRegion(HANDLE process_handle, const MemoryRegion& region, ByteVector& data);
-    
-    // Analysis helpers
-    void AnalyzeMemoryRegion(DWORD process_id, const MemoryRegion& region);
-    void CheckRegionPermissions(const MemoryRegion& region);
-    void CheckRegionContent(HANDLE process_handle, const MemoryRegion& region);
-    void CheckForCodeCaves(HANDLE process_handle, const MemoryRegion& region);
-    
+
     // Pattern matching
-    bool MatchPattern(const ByteVector& data, const MalwareSignature& signature);
-    size_t FindPattern(const ByteVector& data, const ByteVector& pattern, const ByteVector& mask);
     bool LoadMalwareSignatures();
-    
-    // Injection detection helpers
-    bool CheckDllList(DWORD process_id);
-    bool CheckImportTable(DWORD process_id);
-    bool CheckThreadStartAddresses(DWORD process_id);
-    bool CheckUnbackedMemory(DWORD process_id);
-    
+
     // Dump creation
-    bool CreateFullDump(DWORD process_id, const String& output_path);
     bool CreateMiniDump(DWORD process_id, const String& output_path);
-    bool CreateCustomDump(DWORD process_id, const String& output_path, const std::vector<MemoryRegion>& regions);
-    
+
     // Utility methods
     String ProtectionToString(DWORD protection);
     String StateToString(DWORD state);
@@ -132,20 +110,6 @@ private:
     bool IsExecutableRegion(DWORD protection);
     bool IsWritableRegion(DWORD protection);
     bool IsCommittedRegion(DWORD state);
-    
-    // PE analysis
-    struct PeHeader {
-        bool is_valid;
-        WORD machine;
-        DWORD timestamp;
-        DWORD entry_point;
-        WORD subsystem;
-        WORD characteristics;
-        StringVector sections;
-    };
-    
-    bool ParsePeHeader(const ByteVector& data, PeHeader& pe_header);
-    bool ValidatePeHeader(const PeHeader& pe_header);
     
     // Configuration
     bool create_dumps_;

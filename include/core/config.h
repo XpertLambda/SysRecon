@@ -5,41 +5,37 @@
 namespace SysRecon {
 namespace Core {
 
+// Only settings this build actually honours are represented here. Options that
+// were parsed, validated and then ignored have been removed rather than left as
+// decoration -- notably max_threads/timeout_seconds (the scan is entirely
+// sequential and enforces no timeout) and the security block, where
+// encrypt_output: true produced an unencrypted report with no warning and
+// encryption_key sat in plaintext in config.json.
 struct ScanConfig {
     // General settings
     bool verbose_output = false;
     bool stealth_mode = false;
     bool require_admin = true;
-    int max_threads = 4;
-    int timeout_seconds = 300;
-    
+
     // Module settings
     struct {
         bool enabled = true;
         bool enumerate_groups = true;
-        bool check_passwords = false;
-        bool analyze_permissions = true;
     } accounts;
-    
+
     struct {
         bool enabled = true;
-        bool analyze_startup = true;
-        bool check_dependencies = true;
-        bool verify_signatures = false;
     } services;
-    
+
     struct {
         bool enabled = true;
-        bool analyze_memory = false;
         bool check_dlls = true;
-        bool detect_injection = true;
     } processes;
     
     struct {
         bool enabled = true;
         bool scan_listening_ports = true;
         bool analyze_connections = true;
-        bool resolve_hostnames = false;
     } network;
     
     struct {
@@ -50,10 +46,13 @@ struct ScanConfig {
         StringVector custom_keys;
     } registry;
     
+    // Memory is off unless explicitly requested: it opens every non-system
+    // process for reading, which EDR products treat as hostile. This default
+    // also applies when no config file is found -- previously a missing
+    // config.json silently turned the memory module on.
     struct {
         bool enabled = false;
         bool create_dumps = false;
-        bool analyze_heap = false;
         bool scan_for_malware = true;
         size_t max_dump_size_mb = 100;
     } memory;
@@ -72,17 +71,7 @@ struct ScanConfig {
         bool generate_json = true;
         bool generate_csv = true;
         bool generate_html = true;
-        bool generate_pdf = false;
-        bool compress_output = true;
     } output;
-    
-    // Security settings
-    struct {
-        bool encrypt_output = false;
-        String encryption_key;
-        bool sign_reports = false;
-        String signing_cert;
-    } security;
 };
 
 class ConfigManager {
@@ -100,30 +89,29 @@ public:
     
     // Specific getters
     bool IsModuleEnabled(ModuleType module) const;
-    int GetMaxThreads() const { return config_.max_threads; }
-    int GetTimeoutSeconds() const { return config_.timeout_seconds; }
     bool IsVerboseMode() const { return config_.verbose_output; }
     bool IsStealthMode() const { return config_.stealth_mode; }
     
     // Validation
     bool ValidateConfig() const;
     StringVector GetValidationErrors() const;
-    
-    // Environment detection
-    bool DetectEnvironment();
-    void ApplyEnvironmentOptimizations();
-    
+
+    // Non-fatal problems from the last load: unknown keys, including options
+    // that existed in older versions and were removed because they did
+    // nothing (security.*, max_threads, analyze_heap, ...). Reported so an
+    // operator does not believe a setting is in effect when it is not.
+    const StringVector& GetWarnings() const { return warnings_; }
+
 private:
     ConfigManager() = default;
     ~ConfigManager() = default;
     ConfigManager(const ConfigManager&) = delete;
     ConfigManager& operator=(const ConfigManager&) = delete;
     
-    bool ParseConfigFile(const String& content);
-    String SerializeConfig() const;
     
     ScanConfig config_;
     mutable StringVector validation_errors_;
+    StringVector warnings_;
 };
 
 } // namespace Core

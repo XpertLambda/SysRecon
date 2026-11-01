@@ -18,10 +18,16 @@ struct CommandLineOptions {
     bool quiet = false;
     bool stealth = false;
     bool quick = false;
-    String config_file = L"config.json";
-    String output_dir = L"./reports";
-    StringVector formats = {L"json", L"csv", L"html"};
-    
+    // Empty means "not specified": the config is then looked up in the
+    // working directory and next to sysrecon.exe (scan_plan.h).
+    String config_file;
+    // Empty means "not specified on the command line", so config.json's
+    // output_directory is not clobbered by a CLI default. The engine resolves
+    // the effective value (CLI flag > config file > ./reports).
+    String output_dir;
+    // Empty means "use config.json's generate_json/csv/html".
+    StringVector formats;
+
     // Module selection (empty = all modules)
     bool accounts_only = false;
     bool services_only = false;
@@ -42,7 +48,7 @@ void PrintBanner() {
     std::wcout << L"███████║   ██║   ███████║██║  ██║███████╗╚██████╗╚██████╔╝██║ ╚████║\n";
     std::wcout << L"╚══════╝   ╚═╝   ╚══════╝╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚═════╝ ╚═╝  ╚═══╝\n";
     std::wcout << L"\n";
-    std::wcout << L"Windows Security Audit & Reconnaissance Tool v2.0.0 (Phase 2)\n";
+    std::wcout << L"Windows Security Audit & Reconnaissance Tool v" << SYSRECON_VERSION << L"\n";
     std::wcout << L"Copyright (C) 2025 - XpertLambda\n";
     std::wcout << L"═══════════════════════════════════════════════════════════════════════\n\n";
 }
@@ -57,82 +63,137 @@ void PrintHelp() {
     std::wcout << L"  -v, --version           Show version information\n";
     std::wcout << L"  --verbose               Enable verbose output\n";
     std::wcout << L"  --quiet                 Suppress non-essential output\n";
-    std::wcout << L"  --stealth               Run in stealth mode (minimal footprint)\n";
-    std::wcout << L"  --quick                 Quick scan mode (skip deep analysis)\n";
+    std::wcout << L"  --stealth               Low-footprint scan: no console log, no per-process\n";
+    std::wcout << L"                          DLL snapshots, Memory module skipped\n";
+    std::wcout << L"  --quick                 Quick scan: accounts, services, listening ports,\n";
+    std::wcout << L"                          firewall and Run keys only\n";
     std::wcout << L"\n";
-    
+
     std::wcout << L"CONFIGURATION:\n";
-    std::wcout << L"  -c, --config FILE       Load configuration from FILE (default: config.json)\n";
-    std::wcout << L"  -o, --output DIR        Set output directory (default: ./reports)\n";
-    std::wcout << L"  -f, --format FORMAT     Report format: json, csv, html, all (default: all)\n";
+    std::wcout << L"  -c, --config FILE       Load configuration from FILE. Default: ./config.json,\n";
+    std::wcout << L"                          then config.json next to sysrecon.exe\n";
+    std::wcout << L"  -o, --output DIR        Set output directory (default: config's\n";
+    std::wcout << L"                          output_directory, relative to the config file)\n";
+    std::wcout << L"  -f, --format FORMAT     Report format: json, csv, html, all\n";
+    std::wcout << L"                          (default: config's generate_* settings)\n";
     std::wcout << L"                          Can specify multiple: -f json -f csv\n";
     std::wcout << L"\n";
-    
-    std::wcout << L"MODULE SELECTION (scan specific modules only):\n";
-    std::wcout << L"  --accounts              Scan user accounts and groups\n";
-    std::wcout << L"  --services              Scan Windows services\n";
-    std::wcout << L"  --processes             Scan running processes\n";
-    std::wcout << L"  --network               Scan network connections and ports\n";
-    std::wcout << L"  --registry              Scan registry for persistence\n";
-    std::wcout << L"  --memory                Scan process memory (slow)\n";
-    std::wcout << L"  --privesc               Assess local privilege-escalation vectors\n";
-    std::wcout << L"                          (unquoted/weak services, writable binaries & PATH,\n";
-    std::wcout << L"                          AlwaysInstallElevated, UAC, stored credentials)\n";
+
+    std::wcout << L"MODULE SELECTION (replaces the config's module selection):\n";
+    std::wcout << L"  --accounts              User accounts, groups and password policy\n";
+    std::wcout << L"  --services              Windows services\n";
+    std::wcout << L"  --processes             Running processes and loaded DLLs\n";
+    std::wcout << L"  --network               Connections, listening ports, shares, firewall\n";
+    std::wcout << L"  --registry              Persistence keys, security policy, key ACLs\n";
+    std::wcout << L"  --memory                Process memory analysis (slow; EDR-visible)\n";
+    std::wcout << L"  --privesc               Local privilege-escalation assessment\n";
+    std::wcout << L"  --all                   All modules, including Memory\n";
+    std::wcout << L"  Without a module flag, the modules enabled in config.json run\n";
+    std::wcout << L"  (Memory is off by default).\n";
+    std::wcout << L"\n";
+
+    std::wcout << L"EXIT CODES:\n";
+    std::wcout << L"  0  scan completed and all reports were written\n";
+    std::wcout << L"  1  invalid arguments/config, initialization failure, or a report failed\n";
     std::wcout << L"\n";
 
     std::wcout << L"EXAMPLES:\n";
-    std::wcout << L"  sysrecon.exe                          # Full scan with default settings\n";
-    std::wcout << L"  sysrecon.exe --quick --verbose        # Quick verbose scan\n";
+    std::wcout << L"  sysrecon.exe                          # Interactive menu\n";
+    std::wcout << L"  sysrecon.exe --verbose                # Scan config-enabled modules, verbose\n";
+    std::wcout << L"  sysrecon.exe --quick                  # Quick scan\n";
     std::wcout << L"  sysrecon.exe --accounts --services    # Scan only accounts and services\n";
-    std::wcout << L"  sysrecon.exe --privesc                # Privilege-escalation assessment only\n";
-    std::wcout << L"  sysrecon.exe -f json -o ./output      # JSON report to ./output\n";
-    std::wcout << L"  sysrecon.exe --stealth --quiet        # Stealthy silent scan\n";
+    std::wcout << L"  sysrecon.exe --all                    # Everything, including memory\n";
+    std::wcout << L"  sysrecon.exe -f json -o .\\output      # JSON report to .\\output\n";
+    std::wcout << L"  sysrecon.exe --stealth --quiet        # Low-footprint silent scan\n";
     std::wcout << L"\n";
 }
 
 void PrintVersion() {
     PrintBanner();
-    std::wcout << L"Version:      2.0.0 (Phase 2)\n";
+    std::wcout << L"Version:      " << SYSRECON_VERSION << L"\n";
     std::wcout << L"Build Date:   " << __DATE__ << L" " << __TIME__ << L"\n";
     std::wcout << L"Target:       Windows x64\n";
-    std::wcout << L"Compiler:     MinGW-w64 (C++20)\n";
+#if defined(_MSC_VER)
+    std::wcout << L"Compiler:     MSVC " << _MSC_VER << L" (C++20)\n";
+#elif defined(__MINGW32__)
+    std::wcout << L"Compiler:     MinGW-w64 GCC " << __GNUC__ << L"." << __GNUC_MINOR__ << L" (C++20)\n";
+#else
+    std::wcout << L"Compiler:     unknown (C++20)\n";
+#endif
     std::wcout << L"\n";
-    std::wcout << L"New in v2.0.0 (Phase 2 - Pentest Assessment):\n";
-    std::wcout << L"  * Privilege-escalation assessment module (--privesc)\n";
-    std::wcout << L"  * Unquoted/weak-ACL service & writable-binary detection\n";
-    std::wcout << L"  * AlwaysInstallElevated, UAC posture & stored-credential checks\n";
-    std::wcout << L"  * Every finding paired with remediation + MITRE ATT&CK reference\n";
-    std::wcout << L"  * Prioritised HTML report with executive summary & risk score\n";
+    std::wcout << L"New in v" << SYSRECON_VERSION << L":\n";
+    std::wcout << L"  * Fixed: crash on every run with arguments, and lost redirected output,\n";
+    std::wcout << L"    on real Windows\n";
+    std::wcout << L"  * --memory and other module flags override config.json; --all added\n";
+    std::wcout << L"  * config.json found next to sysrecon.exe; every option now honoured\n";
+    std::wcout << L"  * Password/lockout policy, RID-based account and firewall-profile checks\n";
+    std::wcout << L"  * Reports record incomplete checks and are access-restricted\n";
     std::wcout << L"\n";
+}
+
+// True if a standard handle points at a file or pipe rather than a console.
+// Redirected output must never be reattached to a console.
+bool StdHandleIsRedirected(DWORD std_handle) {
+    HANDLE handle = GetStdHandle(std_handle);
+    if (handle == NULL || handle == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    DWORD mode = 0;
+    // GetConsoleMode succeeds only for real console handles.
+    return GetConsoleMode(handle, &mode) == 0;
+}
+
+// True when this process is alone on a console it did not inherit: launched
+// from a shortcut or Explorer, where the window closes the moment we exit and
+// the output (or error) can never be read. Never true from a terminal or with
+// redirected streams.
+bool OwnsConsoleWindow() {
+    DWORD pids[2] = {0, 0};
+    if (GetConsoleProcessList(pids, 2) != 1) {
+        return false;
+    }
+    return !StdHandleIsRedirected(STD_OUTPUT_HANDLE) && !StdHandleIsRedirected(STD_INPUT_HANDLE);
 }
 
 // Interactive menu functions
 void ClearScreen() {
-    system("cls");
+    // Never write escape sequences into a redirected file or pipe.
+    if (StdHandleIsRedirected(STD_OUTPUT_HANDLE)) {
+        return;
+    }
+    // Deliberately not system("cls"): that spawns cmd.exe on every redraw,
+    // which resolves through PATH/%COMSPEC% and is a hijack surface when
+    // running elevated. VT is enabled in wmain.
+    std::wcout << L"\033[2J\033[H";
+    std::wcout.flush();
 }
 
 void WaitForKey() {
     std::wcout << L"\nPress any key to continue...";
     std::wcout.flush();
-    
-    // Use Windows API instead of _getch()
+
     HANDLE hStdin = GetStdHandle(STD_INPUT_HANDLE);
-    DWORD mode;
-    GetConsoleMode(hStdin, &mode);
+    DWORD mode = 0;
+
+    // With redirected or invalid stdin there is no key to wait for. Returning
+    // matters: WaitForKey is called from the fatal-error path, and spinning
+    // here would hang the process instead of reporting the failure.
+    if (hStdin == NULL || hStdin == INVALID_HANDLE_VALUE || !GetConsoleMode(hStdin, &mode)) {
+        std::wcout << L"\n";
+        return;
+    }
+
     SetConsoleMode(hStdin, mode & ~(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT));
-    
+
     INPUT_RECORD inputRecord;
-    DWORD events;
-    
-    // Wait for a key press
-    while (true) {
-        ReadConsoleInput(hStdin, &inputRecord, 1, &events);
-        if (inputRecord.EventType == KEY_EVENT && inputRecord.Event.KeyEvent.bKeyDown) {
+    DWORD events = 0;
+    while (ReadConsoleInput(hStdin, &inputRecord, 1, &events)) {
+        if (events > 0 && inputRecord.EventType == KEY_EVENT &&
+            inputRecord.Event.KeyEvent.bKeyDown) {
             break;
         }
     }
-    
-    // Restore console mode
+
     SetConsoleMode(hStdin, mode);
     std::wcout << L"\n";
 }
@@ -142,7 +203,15 @@ int GetMenuChoice(int min, int max) {
     while (true) {
         std::wcout << L"\nEnter choice (" << min << L"-" << max << L"): ";
         std::wcin >> choice;
-        
+
+        // End of input (stdin redirected from a file, or closed): treat as
+        // "exit". Clearing and retrying here looped forever, so
+        // `sysrecon.exe < NUL` hung instead of returning.
+        if (std::wcin.eof() || std::wcin.bad()) {
+            std::wcout << L"\n";
+            return 0;
+        }
+
         if (std::wcin.fail()) {
             std::wcin.clear();
             std::wcin.ignore(10000, L'\n');
@@ -184,7 +253,7 @@ void ShowMainMenu() {
     std::wcout << L"║                           MAIN MENU                                  ║\n";
     std::wcout << L"╚══════════════════════════════════════════════════════════════════════╝\n";
     std::wcout << L"\n";
-    std::wcout << L"  1. Run Full System Scan (All Modules)\n";
+    std::wcout << L"  1. Run Full System Scan (modules enabled in config)\n";
     std::wcout << L"  2. Run Selective Module Scan\n";
     std::wcout << L"  3. Quick Scan Mode\n";
     std::wcout << L"  4. Stealth Mode Scan\n";
@@ -212,15 +281,19 @@ void ShowModuleSelectionMenu(CommandLineOptions& options) {
     std::wcout << L"  5. Registry Persistence Keys\n";
     std::wcout << L"  6. Process Memory Analysis (Slow)\n";
     std::wcout << L"  7. Privilege Escalation Assessment\n";
-    std::wcout << L"  8. Select All Modules\n";
+    std::wcout << L"  8. Select All Modules (including Memory)\n";
     std::wcout << L"  9. Start Scan with Selected Modules\n";
     std::wcout << L"  0. Back to Main Menu\n";
     std::wcout << L"\n";
     std::wcout << L"══════════════════════════════════════════════════════════════════════\n";
     std::wcout << L"Selected: ";
     
-    if (!options.selective_scan) {
-        std::wcout << L"None (will scan all)";
+    const bool any_selected = options.accounts_only || options.services_only ||
+                              options.processes_only || options.network_only ||
+                              options.registry_only || options.memory_only ||
+                              options.privesc_only;
+    if (!options.selective_scan || !any_selected) {
+        std::wcout << L"None";
     } else {
         bool first = true;
         if (options.accounts_only) { std::wcout << (first ? L"" : L", ") << L"Accounts"; first = false; }
@@ -244,14 +317,16 @@ void ShowConfigurationMenu(CommandLineOptions& options) {
     std::wcout << L"\n";
     std::wcout << L"Current Settings:\n";
     std::wcout << L"────────────────────────────────────────────────────────────────────\n";
-    std::wcout << L"  Config File:    " << options.config_file << L"\n";
-    std::wcout << L"  Output Dir:     " << options.output_dir << L"\n";
-    std::wcout << L"  Report Formats: ";
-    for (size_t i = 0; i < options.formats.size(); i++) {
-        if (i > 0) std::wcout << L", ";
-        std::wcout << options.formats[i];
-    }
-    std::wcout << L"\n";
+    std::wcout << L"  Config File:    "
+               << (options.config_file.empty() ? L"(auto: .\\config.json, then next to sysrecon.exe)"
+                                               : options.config_file.c_str())
+               << L"\n";
+    std::wcout << L"  Output Dir:     "
+               << (options.output_dir.empty() ? L"(from config, default ./reports)" : options.output_dir)
+               << L"\n";
+    std::wcout << L"  Report Formats: "
+               << (options.formats.empty() ? L"(from config)" : Core::Utils::Join(options.formats, L", "))
+               << L"\n";
     std::wcout << L"  Verbose Mode:   " << (options.verbose ? L"Enabled" : L"Disabled") << L"\n";
     std::wcout << L"  Quiet Mode:     " << (options.quiet ? L"Enabled" : L"Disabled") << L"\n";
     std::wcout << L"────────────────────────────────────────────────────────────────────\n";
@@ -283,12 +358,9 @@ void ShowReportOptionsMenu(CommandLineOptions& options) {
     std::wcout << L"  0. Back to Main Menu\n";
     std::wcout << L"\n";
     std::wcout << L"══════════════════════════════════════════════════════════════════════\n";
-    std::wcout << L"Current Formats: ";
-    for (size_t i = 0; i < options.formats.size(); i++) {
-        if (i > 0) std::wcout << L", ";
-        std::wcout << options.formats[i];
-    }
-    std::wcout << L"\n";
+    std::wcout << L"Current Formats: "
+               << (options.formats.empty() ? L"(from config)" : Core::Utils::Join(options.formats, L", "))
+               << L"\n";
 }
 
 bool ParseArguments(int argc, wchar_t* argv[], CommandLineOptions& options) {
@@ -360,10 +432,7 @@ bool ParseArguments(int argc, wchar_t* argv[], CommandLineOptions& options) {
                 if (format == L"all") {
                     options.formats = {L"json", L"csv", L"html"};
                 } else if (format == L"json" || format == L"csv" || format == L"html") {
-                    if (options.formats.size() == 3) {
-                        options.formats.clear();
-                    }
-                    options.formats.push_back(format);
+                    options.formats.push_back(format);  // Duplicates are dropped by ResolveFormats.
                 } else {
                     std::wcerr << L"Error: Invalid format '" << format << L"'. Use json, csv, html, or all\n";
                     return false;
@@ -418,6 +487,14 @@ bool ParseArguments(int argc, wchar_t* argv[], CommandLineOptions& options) {
             continue;
         }
 
+        if (arg == L"--all") {
+            options.accounts_only = options.services_only = options.processes_only = true;
+            options.network_only = options.registry_only = options.memory_only = true;
+            options.privesc_only = true;
+            options.selective_scan = true;
+            continue;
+        }
+        
         // Unknown option
         std::wcerr << L"Error: Unknown option '" << arg << L"'\n";
         std::wcerr << L"Use --help for usage information\n";
@@ -427,210 +504,233 @@ bool ParseArguments(int argc, wchar_t* argv[], CommandLineOptions& options) {
     return true;
 }
 
-// Function to run the actual scan
+// Log level precedence: --verbose > --quiet > config verbose_output > Info.
+// Applied after the config is loaded; previously LoadConfig reset the level
+// from config.json and silently overrode --verbose and --quiet.
+void ApplyLogLevel(const CommandLineOptions& options, bool config_verbose) {
+    LogLevel level = LogLevel::Info;
+    if (options.verbose) {
+        level = LogLevel::Debug;
+    } else if (options.quiet) {
+        level = LogLevel::Error;
+    } else if (config_verbose) {
+        level = LogLevel::Debug;
+    }
+    Logger::Instance().SetLogLevel(level);
+}
+
+CliModuleRequest BuildModuleRequest(const CommandLineOptions& options) {
+    CliModuleRequest req;
+    req.explicit_selection = options.selective_scan;
+    req.modules.accounts = options.accounts_only;
+    req.modules.services = options.services_only;
+    req.modules.processes = options.processes_only;
+    req.modules.network = options.network_only;
+    req.modules.registry = options.registry_only;
+    req.modules.memory = options.memory_only;
+    req.modules.privesc = options.privesc_only;
+    return req;
+}
+
+// Function to run the actual scan. Follows the lifecycle documented in
+// engine.h: everything that decides *what* runs is resolved before
+// Initialize() constructs the modules.
 int RunScan(CommandLineOptions& options) {
-    // Print banner unless quiet
+    Logger& log = Logger::Instance();
+    log.CloseLogFile();
+    // --stealth silences console logging from the very first line; config's
+    // stealth_mode can only take effect once the config has been read.
+    log.SetConsoleOutput(!options.stealth);
+    ApplyLogLevel(options, false);
+
     if (!options.quiet) {
         ClearScreen();
         PrintBanner();
     }
-    
-    // Initialize logger
-    Logger::Instance().SetConsoleOutput(true);
-    
-    if (options.verbose) {
-        Logger::Instance().SetLogLevel(LogLevel::Debug);
-    } else if (options.quiet) {
-        Logger::Instance().SetLogLevel(LogLevel::Error);
-    } else {
-        Logger::Instance().SetLogLevel(LogLevel::Info);
-    }
-    
-    Logger::Instance().Info(L"SysRecon starting...");
-    
-    if (options.verbose) {
-        Logger::Instance().Debug(L"Configuration file: " + options.config_file);
-        Logger::Instance().Debug(L"Output directory: " + options.output_dir);
-        Logger::Instance().Debug(L"Stealth mode: " + String(options.stealth ? L"enabled" : L"disabled"));
-        Logger::Instance().Debug(L"Quick scan: " + String(options.quick ? L"enabled" : L"disabled"));
-    }
-    
-    // Create scan engine
+
+    log.Info(L"SysRecon starting...");
+
     ScanEngine& engine = ScanEngine::Instance();
-    
-    // Load configuration if file exists
-    if (Core::Utils::FileExists(options.config_file)) {
-        Logger::Instance().Info(L"Loading configuration from: " + options.config_file);
-        engine.LoadConfig(options.config_file);
-    } else if (options.config_file != L"config.json") {
-        Logger::Instance().Warning(L"Configuration file not found: " + options.config_file);
-    }
+    engine.Reset();
 
-    // Apply stealth mode to the engine (suppresses console logging)
-    if (options.stealth) {
-        engine.SetStealthMode(true);
-    }
-
-    // Initialize engine
-    if (!engine.Initialize()) {
-        Logger::Instance().Error(L"Failed to initialize scan engine");
+    // 1. Configuration.
+    const String config_path = ResolveConfigPath(options.config_file, Core::Utils::GetExecutableDirectory(),
+                                                 [](const String& p) { return Core::Utils::FileExists(p); });
+    if (!options.config_file.empty() && !Core::Utils::FileExists(options.config_file)) {
+        // An explicit -c that does not exist is an operator error, not a
+        // reason to scan with settings nobody asked for.
+        std::wcerr << L"[-] Configuration file not found: " << options.config_file << L"\n";
         return 1;
     }
-    
-    // Configure selective module scanning
-    if (options.selective_scan) {
-        // Disable all modules first
-        engine.DisableModule(ModuleType::Accounts);
-        engine.DisableModule(ModuleType::Services);
-        engine.DisableModule(ModuleType::Processes);
-        engine.DisableModule(ModuleType::Network);
-        engine.DisableModule(ModuleType::Registry);
-        engine.DisableModule(ModuleType::Memory);
-        engine.DisableModule(ModuleType::PrivEsc);
-
-        // Enable only selected modules
-        if (options.accounts_only) {
-            engine.EnableModule(ModuleType::Accounts);
-            Logger::Instance().Debug(L"Enabled Accounts module");
+    if (config_path.empty()) {
+        log.Info(L"No config.json found (working directory or next to sysrecon.exe); using built-in defaults");
+    } else if (!engine.LoadConfig(config_path)) {
+        // A config file that exists but is invalid aborts the run: carrying on
+        // with defaults would silently drop the operator's module selection,
+        // output location and require_admin setting.
+        std::wcerr << L"[-] Invalid configuration file: " << config_path << L"\n";
+        for (const auto& err : ConfigManager::Instance().GetValidationErrors()) {
+            std::wcerr << L"    * " << err << L"\n";
         }
-        if (options.services_only) {
-            engine.EnableModule(ModuleType::Services);
-            Logger::Instance().Debug(L"Enabled Services module");
-        }
-        if (options.processes_only) {
-            engine.EnableModule(ModuleType::Processes);
-            Logger::Instance().Debug(L"Enabled Processes module");
-        }
-        if (options.network_only) {
-            engine.EnableModule(ModuleType::Network);
-            Logger::Instance().Debug(L"Enabled Network module");
-        }
-        if (options.registry_only) {
-            engine.EnableModule(ModuleType::Registry);
-            Logger::Instance().Debug(L"Enabled Registry module");
-        }
-        if (options.memory_only) {
-            engine.EnableModule(ModuleType::Memory);
-            Logger::Instance().Debug(L"Enabled Memory module");
-        }
-        if (options.privesc_only) {
-            engine.EnableModule(ModuleType::PrivEsc);
-            Logger::Instance().Debug(L"Enabled Privilege Escalation module");
-        }
-    } else {
-        // Full scan - enable modules according to the loaded configuration
-        // (CLI selective flags above take precedence over config when present).
-        ConfigManager& cfg = ConfigManager::Instance();
-        auto applyModule = [&](ModuleType m) {
-            if (cfg.IsModuleEnabled(m)) engine.EnableModule(m);
-            else engine.DisableModule(m);
-        };
-        applyModule(ModuleType::Accounts);
-        applyModule(ModuleType::Services);
-        applyModule(ModuleType::Processes);
-        applyModule(ModuleType::Network);
-        applyModule(ModuleType::Registry);
-        applyModule(ModuleType::Memory);
-        applyModule(ModuleType::PrivEsc);
+        return 1;
     }
-    
+    const ScanConfig& cfg = ConfigManager::Instance().GetConfig();
+    ApplyLogLevel(options, cfg.verbose_output);
+
+    // 2. What to run.
+    const bool stealth = options.stealth || cfg.stealth_mode;
+    StringVector plan_notes;
+    const ModuleSelection selection = ResolveModules(cfg, BuildModuleRequest(options), stealth, &plan_notes);
+    for (const auto& note : plan_notes) {
+        log.Info(note);
+    }
+    if (!selection.Any()) {
+        std::wcerr << L"[-] No scan modules selected";
+        if (stealth && options.memory_only) {
+            std::wcerr << L" (stealth mode does not run the Memory module)";
+        }
+        std::wcerr << L"\n";
+        return 1;
+    }
+    engine.SetModuleSelection(selection);
+    const StringVector formats = ResolveFormats(options.formats, cfg);
+
+    // 3. Where output goes. CLI flags win over the config file; a relative -o
+    // is relative to the working directory, as for any command-line tool.
+    if (!options.output_dir.empty()) {
+        engine.SetOutputDirectory(options.output_dir);
+    }
+    engine.SetStealthMode(stealth);
+
+    // 4. Construct and configure exactly the selected modules.
+    if (!engine.Initialize()) {
+        log.Error(L"Failed to initialize scan engine");
+        if (engine.HasErrors()) {
+            for (const auto& err : engine.GetErrors()) {
+                std::wcerr << L"  * " << err << L"\n";
+            }
+        }
+        return 1;
+    }
+    engine.ApplyConfigToModules();
+
+    const String output_dir = engine.GetOutputDirectory();
+    {
+        const String log_path = output_dir + L"\\sysrecon.log";
+        log.SetLogFile(log_path);
+        if (!Core::Utils::RestrictToAdministrators(log_path)) {
+            log.Warning(L"Could not restrict access to the log file: " + log_path);
+        }
+        log.Info(L"Log file: " + log_path);
+    }
+
     // Display scan information
     if (!options.quiet) {
         std::wcout << L"[*] Starting system scan...\n";
-        
-        if (options.stealth) {
-            std::wcout << L"  [STEALTH] Stealth Mode: Enabled\n";
+        std::wcout << L"  Config:   " << (engine.IsConfigLoaded() ? engine.GetConfigPath() : String(L"(built-in defaults)")) << L"\n";
+        std::wcout << L"  Modules:  " << Core::Utils::Join(selection.Names(), L", ") << L"\n";
+        std::wcout << L"  Formats:  " << Core::Utils::Join(formats, L", ") << L"\n";
+        std::wcout << L"  Output:   " << output_dir << L"\n";
+        if (stealth) {
+            std::wcout << L"  [STEALTH] Low-footprint mode: no DLL snapshots, no memory module\n";
         }
-        
         if (options.quick) {
-            std::wcout << L"  [QUICK] Quick Scan: Enabled\n";
+            std::wcout << L"  [QUICK] Quick scan: essential checks only\n";
         }
-        
-        if (options.selective_scan) {
-            std::wcout << L"\n[MODULES] Scanning selected modules:\n";
-            if (options.accounts_only) std::wcout << L"  * User Accounts & Groups\n";
-            if (options.services_only) std::wcout << L"  * Windows Services\n";
-            if (options.processes_only) std::wcout << L"  * Running Processes\n";
-            if (options.network_only) std::wcout << L"  * Network Connections\n";
-            if (options.registry_only) std::wcout << L"  * Registry Keys\n";
-            if (options.memory_only) std::wcout << L"  * Process Memory\n";
-            if (options.privesc_only) std::wcout << L"  * Privilege Escalation Assessment\n";
-            std::wcout << L"\n";
-        } else {
-            std::wcout << L"  [FULL] Full system scan (all modules)\n\n";
+        for (const auto& note : plan_notes) {
+            std::wcout << L"  [i] " << note << L"\n";
         }
+        for (const auto& warning : ConfigManager::Instance().GetWarnings()) {
+            std::wcout << L"  [!] " << warning << L"\n";
+        }
+        std::wcout << L"\n";
     }
-    
-    Logger::Instance().Info(L"Starting scan...");
 
-    // Run the scan (quick mode runs the essential-checks subset)
-    bool success = options.quick ? engine.RunQuickScan() : engine.RunFullScan();
+    log.Info(L"Starting scan...");
+    Core::Utils::Timer timer;
+    timer.Start();
+
+    // --quick runs the essential checks only.
+    const bool success = options.quick ? engine.RunQuickScan() : engine.RunFullScan();
+    timer.Stop();
 
     if (!success) {
-        Logger::Instance().Error(L"Scan failed");
+        log.Error(L"Scan failed");
+        engine.Cleanup();
         return 1;
     }
-    
-    Logger::Instance().Info(L"Scan completed successfully!");
-    
-    if (!options.quiet) {
-        std::wcout << L"\n[+] Scan completed!\n\n";
+
+    // Individual modules may fail (missing privileges, an API unavailable on
+    // this host) without invalidating the rest of the scan. Surface those
+    // rather than letting the run look clean; they are also in every report.
+    if (engine.HasErrors() && !options.quiet) {
+        std::wcout << L"\n[WARNING] Some checks did not complete:\n";
+        for (const auto& err : engine.GetErrors()) {
+            std::wcout << L"  * " << err << L"\n";
+        }
+        std::wcout << L"  Reports below cover the checks that did complete.\n";
     }
-    
-    // Generate reports
-    Logger::Instance().Info(L"Generating reports...");
-    
+
+    log.Info(L"Scan completed in " + timer.GetElapsedString());
+
     if (!options.quiet) {
+        std::wcout << L"\n[+] Scan completed in " << timer.GetElapsedString() << L"\n\n";
         std::wcout << L"[REPORTS] Generating reports...\n";
     }
-    
-    String timestamp = Core::Utils::GetCurrentTimestamp();
-    
-    // Create output directory
-    if (!Core::Utils::DirectoryExists(options.output_dir)) {
-        Logger::Instance().Info(L"Creating output directory: " + options.output_dir);
-        Core::Utils::CreateDirectory(options.output_dir);
+
+    const String timestamp = Core::Utils::GetCurrentTimestamp();
+    if (!Core::Utils::DirectoryExists(output_dir)) {
+        log.Info(L"Creating output directory: " + output_dir);
+        Core::Utils::CreateDirectory(output_dir);
     }
-    
-    // Generate reports in requested formats
+
     int reports_generated = 0;
     int reports_failed = 0;
-    
-    for (const auto& format : options.formats) {
-        String extension = format;
-        String file_path = options.output_dir + L"/scan_" + timestamp + L"." + extension;
-        
+
+    for (const auto& format : formats) {
+        const String file_path = output_dir + L"\\scan_" + timestamp + L"." + format;
+
         if (engine.ExportResults(format, file_path)) {
             reports_generated++;
+            // Reports are sensitive; see RestrictToAdministrators.
+            if (!Core::Utils::RestrictToAdministrators(file_path)) {
+                log.Warning(L"Could not restrict access to report: " + file_path);
+            }
             if (!options.quiet) {
                 std::wcout << L"  [+] " << format << L" report: " << file_path << L"\n";
             }
-            Logger::Instance().Info(L"Generated " + format + L" report: " + file_path);
+            log.Info(L"Generated " + format + L" report: " + file_path);
         } else {
             reports_failed++;
             std::wcerr << L"  [-] Failed to generate " << format << L" report\n";
-            Logger::Instance().Error(L"Failed to generate " + format + L" report");
+            log.Error(L"Failed to generate " + format + L" report");
         }
     }
-    
+
     if (!options.quiet) {
-        std::wcout << L"\n";
+        // Severity summary, so the operator sees what matters without opening a file.
+        size_t counts[4] = {0, 0, 0, 0};
+        for (const auto& r : engine.GetResults()) {
+            counts[static_cast<int>(r.risk_level)]++;
+        }
+        std::wcout << L"\n[SUMMARY] " << engine.GetResults().size() << L" findings: "
+                   << counts[3] << L" critical, " << counts[2] << L" high, "
+                   << counts[1] << L" medium, " << counts[0] << L" low\n";
+
         if (reports_generated > 0) {
             std::wcout << L"[+] Successfully generated " << reports_generated << L" report(s)\n";
         }
         if (reports_failed > 0) {
             std::wcout << L"[!] Failed to generate " << reports_failed << L" report(s)\n";
         }
-        
-        std::wcout << L"\n[OUTPUT] Reports saved to: " << options.output_dir << L"\n";
+        std::wcout << L"\n[OUTPUT] Reports saved to: " << output_dir << L"\n";
         std::wcout << L"\nScan complete! Review the reports for detailed findings.\n";
     }
-    
-    // Cleanup
+
     engine.Cleanup();
-    
-    Logger::Instance().Info(L"SysRecon finished");
-    
+    log.Info(L"SysRecon finished");
+    log.CloseLogFile();
+
     return (reports_failed > 0) ? 1 : 0;
 }
 
@@ -648,7 +748,17 @@ int InteractiveMode() {
                 case 1: { // Full scan
                     std::wcout << L"\n[*] Running full system scan...\n";
                     WaitForKey();
-                    int result = RunScan(options);
+                    // Start from the persistent settings but force a genuine
+                    // full scan: `options` is shared across menu actions, so a
+                    // prior visit to the module-selection menu would otherwise
+                    // silently turn "Full System Scan" into a selective one.
+                    CommandLineOptions full = options;
+                    full.selective_scan = false;
+                    full.quick = false;
+                    full.accounts_only = full.services_only = full.processes_only = false;
+                    full.network_only = full.registry_only = full.memory_only = false;
+                    full.privesc_only = false;
+                    int result = RunScan(full);
                     if (result == 0) {
                         std::wcout << L"\n[+] Scan completed successfully!\n";
                     } else {
@@ -663,7 +773,7 @@ int InteractiveMode() {
                 while (selecting) {
                     ShowModuleSelectionMenu(options);
                     int modChoice = GetMenuChoice(0, 9);
-
+                    
                     switch (modChoice) {
                         case 1:
                             options.accounts_only = !options.accounts_only;
@@ -703,23 +813,37 @@ int InteractiveMode() {
                             options.privesc_only = true;
                             options.selective_scan = true;
                             break;
-                        case 9:
-                            if (options.selective_scan) {
-                                std::wcout << L"\n[*] Starting selective scan...\n";
-                                WaitForKey();
-                                int result = RunScan(options);
-                                if (result == 0) {
-                                    std::wcout << L"\n[+] Scan completed successfully!\n";
-                                } else {
-                                    std::wcout << L"\n[-] Scan failed! Check the logs for details.\n";
-                                }
-                                WaitForKey();
-                                selecting = false;
-                            } else {
+                        case 9: {
+                            // Check that a module is actually selected, not
+                            // merely that the selection menu was visited:
+                            // selective_scan is sticky, so toggling every
+                            // module back off still passed this guard and ran
+                            // a zero-module scan reported as a success.
+                            const bool any_selected =
+                                options.accounts_only || options.services_only ||
+                                options.processes_only || options.network_only ||
+                                options.registry_only || options.memory_only ||
+                                options.privesc_only;
+
+                            if (!any_selected) {
                                 std::wcout << L"\n[!] Please select at least one module!\n";
                                 WaitForKey();
+                                break;
                             }
+
+                            options.selective_scan = true;
+                            std::wcout << L"\n[*] Starting selective scan...\n";
+                            WaitForKey();
+                            int result = RunScan(options);
+                            if (result == 0) {
+                                std::wcout << L"\n[+] Scan completed successfully!\n";
+                            } else {
+                                std::wcout << L"\n[-] Scan failed! Check the logs for details.\n";
+                            }
+                            WaitForKey();
+                            selecting = false;
                             break;
+                        }
                         case 0:
                             selecting = false;
                             break;
@@ -893,32 +1017,137 @@ int InteractiveMode() {
     }
 }
 
-int wmain(int argc, wchar_t* argv[]);
+// Writes std::wcout / std::wcerr straight to the Win32 handle.
+//
+// The default path (wide stream -> CRT -> locale-dependent wide-to-narrow
+// conversion) silently dropped *all* output on real Windows when stdout was
+// redirected to a file or pipe: the first character the CRT could not
+// convert -- the banner's box-drawing glyphs -- put the stream into a failed
+// state and every later write was discarded. Wine's CRT is more lenient, so
+// only the Windows CI job saw it. Writing explicitly removes the CRT locale
+// from the picture:
+//   * console handle      -> WriteConsoleW (native UTF-16, any character)
+//   * file / pipe handle  -> UTF-8 via WriteFile (what `> out.txt` expects)
+class Win32OutputBuf : public std::wstreambuf {
+public:
+    explicit Win32OutputBuf(DWORD std_handle) : std_handle_(std_handle) {
+        setp(buffer_, buffer_ + kSize);
+    }
+    ~Win32OutputBuf() override { Flush(); }
 
-int main() {
-    return wmain(__argc, __wargv);
-}
+protected:
+    int_type overflow(int_type ch) override {
+        if (!Flush()) {
+            return traits_type::eof();
+        }
+        if (!traits_type::eq_int_type(ch, traits_type::eof())) {
+            *pptr() = traits_type::to_char_type(ch);
+            pbump(1);
+        }
+        return traits_type::not_eof(ch);
+    }
 
+    int sync() override { return Flush() ? 0 : -1; }
+
+private:
+    static constexpr std::ptrdiff_t kSize = 1024;
+
+    bool Flush() {
+        std::wstring text(pending_);
+        pending_.clear();
+        text.append(pbase(), pptr());
+        setp(buffer_, buffer_ + kSize);
+        if (text.empty()) {
+            return true;
+        }
+        // Never split a surrogate pair across two writes.
+        const wchar_t last = text.back();
+        if (last >= 0xD800 && last <= 0xDBFF) {
+            pending_.assign(1, last);
+            text.pop_back();
+        }
+
+        HANDLE handle = GetStdHandle(std_handle_);
+        if (handle == NULL || handle == INVALID_HANDLE_VALUE) {
+            return true;  // No stream to write to (e.g. detached); not an error.
+        }
+        DWORD mode = 0;
+        if (GetConsoleMode(handle, &mode)) {
+            const wchar_t* data = text.data();
+            size_t remaining = text.size();
+            while (remaining > 0) {
+                const DWORD chunk = static_cast<DWORD>(std::min<size_t>(remaining, 8192));
+                DWORD written = 0;
+                if (!WriteConsoleW(handle, data, chunk, &written, nullptr) || written == 0) {
+                    return false;
+                }
+                data += written;
+                remaining -= written;
+            }
+            return true;
+        }
+        // Files and pipes get CRLF line endings, as the CRT's text mode did.
+        std::wstring crlf;
+        crlf.reserve(text.size() + text.size() / 32);
+        for (wchar_t c : text) {
+            if (c == L'\n' && !last_was_cr_) {
+                crlf += L'\r';
+            }
+            crlf += c;
+            last_was_cr_ = (c == L'\r');
+        }
+        const std::string utf8 = Core::Utils::WideToUtf8(crlf);
+        const char* data = utf8.data();
+        size_t remaining = utf8.size();
+        while (remaining > 0) {
+            const DWORD chunk = static_cast<DWORD>(std::min<size_t>(remaining, 1 << 20));
+            DWORD written = 0;
+            if (!WriteFile(handle, data, chunk, &written, nullptr) || written == 0) {
+                return false;
+            }
+            data += written;
+            remaining -= written;
+        }
+        return true;
+    }
+
+    DWORD std_handle_;
+    bool last_was_cr_ = false;
+    wchar_t buffer_[kSize];
+    std::wstring pending_;
+};
+
+// Entry point. MinGW builds use -municode (CMakeLists.txt) so the CRT calls
+// wmain with real wide arguments; MSVC does so natively. The previous
+// `int main() { return wmain(__argc, __wargv); }` shim crashed on every
+// real Windows run with arguments: without -municode the CRT never fills
+// __wargv, so argv was NULL. Wine fills it regardless, which hid the bug.
 int wmain(int argc, wchar_t* argv[]) {
     try {
-        // Check if we already have a console attached
-        HWND consoleWindow = GetConsoleWindow();
-        
-        // Only allocate a new console if we don't have one
-        if (consoleWindow == NULL) {
-            if (!AllocConsole()) {
-                // If AllocConsole fails, we might already have one
-                // This is not a critical error, continue
+        // Console attachment.
+        //
+        // Do NOT reopen the standard streams onto CONOUT$ when they are already
+        // valid: if stdout is a file or a pipe (sysrecon.exe --scan > out.txt),
+        // GetConsoleWindow() still returns NULL, and reopening would silently
+        // redirect every byte of output to an invisible console -- leaving the
+        // analyst with an empty file. Redirection must always win.
+        if (GetConsoleWindow() == NULL && !StdHandleIsRedirected(STD_OUTPUT_HANDLE)) {
+            // Prefer the parent's console (launched from an existing cmd.exe);
+            // only allocate a fresh one if there is genuinely none to attach to.
+            if (!AttachConsole(ATTACH_PARENT_PROCESS)) {
+                AllocConsole();
             }
-            
-            // Reopen standard streams only if we just created a console
-            FILE* fpStdout = nullptr;
-            FILE* fpStderr = nullptr;
-            FILE* fpStdin = nullptr;
-            
-            freopen_s(&fpStdout, "CONOUT$", "w", stdout);
-            freopen_s(&fpStderr, "CONOUT$", "w", stderr);
-            freopen_s(&fpStdin, "CONIN$", "r", stdin);
+
+            FILE* fp = nullptr;
+            if (!StdHandleIsRedirected(STD_OUTPUT_HANDLE)) {
+                freopen_s(&fp, "CONOUT$", "w", stdout);
+            }
+            if (!StdHandleIsRedirected(STD_ERROR_HANDLE)) {
+                freopen_s(&fp, "CONOUT$", "w", stderr);
+            }
+            if (!StdHandleIsRedirected(STD_INPUT_HANDLE)) {
+                freopen_s(&fp, "CONIN$", "r", stdin);
+            }
         }
         
         // Initialize console for Unicode output
@@ -936,8 +1165,15 @@ int wmain(int argc, wchar_t* argv[]) {
         // Set locale for proper wide character output
         setlocale(LC_ALL, ".UTF8");
         
-        // Sync C++ streams with C streams
-        std::ios::sync_with_stdio(true);
+        // Route wide output through Win32OutputBuf (see its comment). Static:
+        // the buffers must outlive every use of the streams, including the
+        // logger writing during static destruction.
+        static Win32OutputBuf out_buf(STD_OUTPUT_HANDLE);
+        static Win32OutputBuf err_buf(STD_ERROR_HANDLE);
+        std::wcout.rdbuf(&out_buf);
+        std::wcerr.rdbuf(&err_buf);
+        std::wcout.clear();
+        std::wcerr.clear();
         
         // If no arguments provided, launch interactive menu
         if (argc == 1) {
@@ -946,24 +1182,23 @@ int wmain(int argc, wchar_t* argv[]) {
         
         // Parse command-line arguments
         CommandLineOptions options;
-        
+        int rc = 0;
+
         if (!ParseArguments(argc, argv, options)) {
-            return 1;
-        }
-        
-        // Handle help and version
-        if (options.show_help) {
+            rc = 1;
+        } else if (options.show_help) {
             PrintHelp();
-            return 0;
-        }
-        
-        if (options.show_version) {
+        } else if (options.show_version) {
             PrintVersion();
-            return 0;
+        } else {
+            rc = RunScan(options);
         }
-        
-        // Run scan with command-line options
-        return RunScan(options);
+
+        // Launched from a shortcut (Quick Scan, Help): keep the window open.
+        if (OwnsConsoleWindow()) {
+            WaitForKey();
+        }
+        return rc;
         
     } catch (const std::exception& e) {
         std::wcerr << L"\n[ERROR] FATAL ERROR: " << e.what() << L"\n";

@@ -72,87 +72,21 @@ public:
     void SetCheckPermissions(bool enable) { check_permissions_ = enable; }
     void AddCustomKey(const String& key_path) { custom_keys_.push_back(key_path); }
     
-    // Analysis methods
-    SecurityLevel AssessStartupRisk(const StartupEntry& entry);
-    SecurityLevel AssessPolicyRisk(const PolicyEntry& entry);
-    SecurityLevel AssessRegistryRisk(const RegistryEntry& entry);
-    
-    StringVector FindSuspiciousStartup();
-    StringVector FindWeakPolicies();
-    StringVector FindSuspiciousValues();
-    StringVector FindUnauthorizedModifications();
-    
-    // Registry operations
-    bool ReadRegistryValue(HKEY root, const String& key_path, const String& value_name, RegistryEntry& entry);
-    StringVector EnumerateSubkeys(HKEY root, const String& key_path);
-    StringVector EnumerateValues(HKEY root, const String& key_path);
-    bool KeyExists(HKEY root, const String& key_path);
-    bool ValueExists(HKEY root, const String& key_path, const String& value_name);
-    
 private:
-    // Startup analysis
-    bool ScanRunKeys();
-    bool ScanRunOnceKeys();
-    bool ScanServicesKey();
-    bool ScanWinlogonKey();
-    bool ScanStartupFolders();
-    bool ScanScheduledTasks();
-    
-    // Policy analysis
-    bool ScanSecurityPolicies();
-    bool ScanAuditPolicies();
-    bool ScanUserRightsPolicies();
-    bool ScanPasswordPolicies();
-    bool ScanAccountLockoutPolicies();
-    
-    // Permission analysis
-    bool CheckKeyPermissions(HKEY root, const String& key_path);
-    bool GetKeyOwner(HKEY root, const String& key_path, String& owner);
-    bool GetKeyPermissions(HKEY root, const String& key_path, StringVector& permissions);
-    
-    // Analysis helpers
-    void AnalyzeStartupEntry(const StartupEntry& entry);
-    void AnalyzePolicyEntry(const PolicyEntry& entry);
-    void AnalyzeRegistryEntry(const RegistryEntry& entry);
-    
-    // Utility methods
-    String HkeyToString(HKEY key);
-    String RegTypeToString(DWORD type);
-    String GetValueTypeDescription(DWORD type);
-    bool IsStartupLocationSuspicious(const String& location);
-    bool IsCommandSuspicious(const String& command);
-    bool IsPolicyValueSecure(const String& policy_name, const String& value);
-    
-    // File analysis
-    bool AnalyzeReferencedFile(const String& file_path, StartupEntry& entry);
-    bool IsFileSigned(const String& file_path);
-    String GetFileCompany(const String& file_path);
-    String GetFileDescription(const String& file_path);
-    
-    // Well-known registry locations
-    static const StringVector GetStartupKeys();
-    static const StringVector GetPolicyKeys();
-    static const StringVector GetSecurityKeys();
-    
     // Configuration
     bool scan_startup_keys_;
     bool analyze_policies_;
     bool check_permissions_;
     StringVector custom_keys_;
-    
+
     // Data storage
     std::vector<StartupEntry> startup_entries_;
     std::vector<PolicyEntry> policy_entries_;
     std::vector<RegistryEntry> registry_entries_;
     ScanResults scan_results_;
-    
+
     // State
     bool initialized_;
-    StringVector error_messages_;
-    
-    // Caches
-    std::map<String, bool> file_signature_cache_;
-    std::map<String, String> file_company_cache_;
 };
 
 } // namespace Modules

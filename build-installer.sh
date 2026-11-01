@@ -16,6 +16,11 @@
 
 set -e  # Exit on error
 
+# Read the version from installer.nsi so this script cannot drift out of sync
+# with the installer it builds.
+VERSION="$(sed -n 's/^!define PRODUCT_VERSION "\(.*\)"/\1/p' installer.nsi)"
+SETUP_EXE="SysRecon-Setup-${VERSION}.exe"
+
 echo "============================================"
 echo "SysRecon Installer Build Script (Linux)"
 echo "============================================"
@@ -59,36 +64,15 @@ fi
 echo -e "${GREEN}[OK]${NC} SysRecon executable found"
 echo
 
-# Check if required files exist
-if [ ! -f "config.json" ]; then
-    echo -e "${YELLOW}[WARNING]${NC} config.json not found - creating default"
-    cat > config.json <<EOF
-{
-  "verbose": false,
-  "output_dir": "./reports",
-  "report_format": "all",
-  "modules": {
-    "accounts": true,
-    "services": true,
-    "processes": true,
-    "network": true,
-    "registry": true,
-    "memory": true
-  }
-}
-EOF
-fi
-
-if [ ! -f "LICENSE" ]; then
-    echo -e "${YELLOW}[WARNING]${NC} LICENSE file not found - creating placeholder"
-    cat > LICENSE <<EOF
-Proprietary Software - All Rights Reserved
-Copyright (c) 2025 XpertLambda
-
-Unauthorized copying, modification, distribution, or use of this software
-is strictly prohibited.
-EOF
-fi
+# Check required files. These are tracked in git; generating stand-ins here
+# used to produce a config.json in an obsolete schema the binary does not
+# read, and a LICENSE with different terms from the real one.
+for required in config.json LICENSE; do
+    if [ ! -f "$required" ]; then
+        echo -e "${RED}[ERROR]${NC} $required not found (it is tracked in git; restore it with: git checkout -- $required)"
+        exit 1
+    fi
+done
 
 if [ ! -f "README.md" ]; then
     echo -e "${RED}[ERROR]${NC} README.md not found"
@@ -112,9 +96,9 @@ if makensis -V4 installer.nsi; then
     echo -e "${GREEN}Installer Build Successful!${NC}"
     echo "============================================"
     echo
-    echo "Installer created: SysRecon-Setup-1.0.0.exe"
+    echo "Installer created: ${SETUP_EXE}"
     echo
-    echo "File size: $(du -h SysRecon-Setup-*.exe | cut -f1)"
+    echo "File size: $(du -h "${SETUP_EXE}" | cut -f1)"
     echo
     echo "You can now transfer this installer to Windows and run it."
     echo "The installer includes:"
@@ -127,7 +111,7 @@ if makensis -V4 installer.nsi; then
     echo "  ✓ Uninstaller"
     echo
     echo "To test on Windows:"
-    echo "  1. Transfer SysRecon-Setup-1.0.0.exe to Windows"
+    echo "  1. Transfer ${SETUP_EXE} to Windows"
     echo "  2. Right-click and 'Run as Administrator'"
     echo "  3. Follow the installation wizard"
     echo

@@ -18,13 +18,14 @@
 !include "LogicLib.nsh"
 !include "x64.nsh"
 !include "FileFunc.nsh"
+!include "Sections.nsh"
 
 ;--------------------------------
 ; General Configuration
 
 ; Application Information
 !define PRODUCT_NAME "SysRecon"
-!define PRODUCT_VERSION "1.0.0"
+!define PRODUCT_VERSION "1.3.0"
 !define PRODUCT_PUBLISHER "XpertLambda"
 !define PRODUCT_WEB_SITE "https://github.com/XpertLambda/SysRecon"
 !define PRODUCT_DESCRIPTION "Windows Security Audit & Reconnaissance Tool"
@@ -89,6 +90,26 @@ VIAddVersionKey "FileVersion" "${PRODUCT_VERSION}"
 !define MUI_STARTMENUPAGE_REGISTRY_VALUENAME "${PRODUCT_STARTMENU_REGVAL}"
 
 ;--------------------------------
+; Macros
+
+; Marks a shortcut "Run as administrator" (SLDF_RUNAS_USER, bit 0x20 of the
+; LinkFlags byte at offset 0x15 of the .lnk). The shortcut descriptions always
+; said "Run as Administrator" but nothing requested elevation, so a scan
+; launched from the Start Menu aborted on require_admin.
+!macro SetShortcutRunAsAdmin LNK
+  ClearErrors
+  FileOpen $9 "${LNK}" a
+  ${IfNot} ${Errors}
+    FileSeek $9 0x15 SET
+    FileReadByte $9 $8
+    IntOp $8 $8 | 0x20
+    FileSeek $9 0x15 SET
+    FileWriteByte $9 $8
+    FileClose $9
+  ${EndIf}
+!macroend
+
+;--------------------------------
 ; Variables
 
 Var StartMenuFolder
@@ -98,6 +119,10 @@ Var StartMenuFolder
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE "LICENSE"
+; Components page: the optional sections below (Start Menu, Desktop, PATH) and
+; their MUI_DESCRIPTION_TEXT entries were unreachable without it -- the user
+; could never see or deselect them, and NSIS warned on every build.
+!insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_STARTMENU Application $StartMenuFolder
 !insertmacro MUI_PAGE_INSTFILES
@@ -119,15 +144,22 @@ Var StartMenuFolder
 ; Installer Functions
 
 Function .onInit
-  ; Check if running on 64-bit Windows
+  ; Check if running on 64-bit Windows. A MessageBox is shown even under /S,
+  ; so the silent path aborts without prompting instead of hanging.
   ${IfNot} ${RunningX64}
+    IfSilent +2
     MessageBox MB_OK|MB_ICONSTOP "This application requires 64-bit Windows (Windows 10 or later)."
     Abort
   ${EndIf}
-  
+
+  Call ApplyCommandLineOptions
+
   ; Check if already installed
   ReadRegStr $0 ${PRODUCT_UNINST_ROOT_KEY} "${PRODUCT_UNINST_KEY}" "UninstallString"
   ${If} $0 != ""
+    ; Under /S, upgrade in place without prompting: a MessageBox here would
+    ; block a managed deployment indefinitely.
+    IfSilent continue
     MessageBox MB_YESNO|MB_ICONQUESTION "${PRODUCT_NAME} is already installed.$\n$\nWould you like to uninstall the previous version first?" IDNO continue
     ExecWait '$0 _?=$INSTDIR'
     Delete $0
@@ -145,11 +177,16 @@ Section "Core Files" SecCore
   SetOutPath "$INSTDIR"
   SetOverwrite on
   
-  ; Main executable
-  File "build\sysrecon.exe"
+  ; Main executable. Forward slashes: makensis on POSIX (build-installer.sh)
+  ; does not treat "\" as a path separator, and NSIS on Windows accepts "/".
+  File "build/sysrecon.exe"
   
-  ; Configuration file
+  ; Configuration file. Never overwrite an existing config.json: an upgrade
+  ; used to silently replace the operator's settings with the defaults. The
+  ; shipped default is always available as configs\default.json.
+  SetOverwrite off
   File "config.json"
+  SetOverwrite on
   
   ; Documentation
   File "README.md"
@@ -161,7 +198,9 @@ Section "Core Files" SecCore
   
   ; Create example config
   CreateDirectory "$INSTDIR\configs"
-  CopyFiles "$INSTDIR\config.json" "$INSTDIR\configs\default.json"
+  SetOutPath "$INSTDIR\configs"
+  File /oname=default.json "config.json"
+  SetOutPath "$INSTDIR"
   
   ; Store installation folder
   WriteRegStr HKLM "Software\${PRODUCT_NAME}" "InstallDir" "$INSTDIR"
@@ -193,12 +232,14 @@ Section "Start Menu Shortcuts" SecStartMenu
   
   ; Main application shortcut (run as admin)
   CreateShortcut "$SMPROGRAMS\$StartMenuFolder\${PRODUCT_NAME}.lnk" "$INSTDIR\sysrecon.exe" "" "$INSTDIR\sysrecon.exe" 0 SW_SHOWNORMAL "" "Windows Security Audit Tool (Run as Administrator)"
+  !insertmacro SetShortcutRunAsAdmin "$SMPROGRAMS\$StartMenuFolder\${PRODUCT_NAME}.lnk"
   
   ; Help shortcut
   CreateShortcut "$SMPROGRAMS\$StartMenuFolder\${PRODUCT_NAME} Help.lnk" "$INSTDIR\sysrecon.exe" "--help" "$INSTDIR\sysrecon.exe" 0 SW_SHOWNORMAL "" "View SysRecon Help"
   
   ; Quick Scan shortcut
-  CreateShortcut "$SMPROGRAMS\$StartMenuFolder\Quick Scan.lnk" "$INSTDIR\sysrecon.exe" "--quick" "$INSTDIR\sysrecon.exe" 0 SW_SHOWNORMAL "" "Run Quick Security Scan"
+  CreateShortcut "$SMPROGRAMS\$StartMenuFolder\Quick Scan.lnk" "$INSTDIR\sysrecon.exe" "--quick" "$INSTDIR\sysrecon.exe" 0 SW_SHOWNORMAL "" "Run Quick Security Scan (Run as Administrator)"
+  !insertmacro SetShortcutRunAsAdmin "$SMPROGRAMS\$StartMenuFolder\Quick Scan.lnk"
   
   ; Documentation shortcuts
   CreateShortcut "$SMPROGRAMS\$StartMenuFolder\README.lnk" "$INSTDIR\README.txt"
@@ -212,12 +253,46 @@ SectionEnd
 
 Section "Desktop Shortcut" SecDesktop
   CreateShortcut "$DESKTOP\${PRODUCT_NAME}.lnk" "$INSTDIR\sysrecon.exe" "" "$INSTDIR\sysrecon.exe" 0 SW_SHOWNORMAL "" "Windows Security Audit Tool (Run as Administrator)"
+  !insertmacro SetShortcutRunAsAdmin "$DESKTOP\${PRODUCT_NAME}.lnk"
 SectionEnd
 
-Section "Add to PATH" SecPath
-  ; Add installation directory to system PATH (simplified - user can do manually)
-  DetailPrint "To add to PATH manually, add: $INSTDIR"
+Section /o "Add to PATH" SecPath
+  ; Previously this section only printed a hint while its description claimed
+  ; it added the directory to PATH.
+  ;
+  ; PowerShell edits the machine PATH rather than NSIS string functions,
+  ; which are limited to NSIS_MAX_STRLEN (1024 by default) and would silently
+  ; truncate -- i.e. destroy -- a long PATH. The directory is passed through
+  ; an environment variable so no quoting of $INSTDIR is ever needed.
+  System::Call 'Kernel32::SetEnvironmentVariable(t "SYSRECON_DIR", t "$INSTDIR")i'
+  nsExec::ExecToLog 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$d=$$env:SYSRECON_DIR; $$p=[Environment]::GetEnvironmentVariable(\"Path\",\"Machine\"); $$parts=@($$p -split \";\" | Where-Object { $$_ -ne \"\" }); if ($$parts -notcontains $$d) { [Environment]::SetEnvironmentVariable(\"Path\", (($$parts + $$d) -join \";\"), \"Machine\") }"'
+  Pop $0
+  ${If} $0 == 0
+    WriteRegDWORD HKLM "Software\${PRODUCT_NAME}" "AddedToPath" 1
+    DetailPrint "Added $INSTDIR to the system PATH (open a new terminal to use it)"
+  ${Else}
+    DetailPrint "Could not update PATH (exit code $0); add $INSTDIR manually"
+  ${EndIf}
 SectionEnd
+
+;--------------------------------
+; Command-line options
+;
+;   /ADDTOPATH   select the (default-off) "Add to PATH" component. Lets an
+;                unattended install (/S) request it, since /S otherwise only
+;                installs default-selected sections.
+;
+; Defined after the sections because it references their index constants;
+; .onInit reaches it with Call, which resolves at link time.
+
+Function ApplyCommandLineOptions
+  ${GetParameters} $R0
+  ClearErrors
+  ${GetOptions} $R0 "/ADDTOPATH" $R1
+  ${IfNot} ${Errors}
+    !insertmacro SelectSection ${SecPath}
+  ${EndIf}
+FunctionEnd
 
 ;--------------------------------
 ; Section Descriptions
@@ -233,18 +308,31 @@ SectionEnd
 ; Uninstaller Section
 
 Section "Uninstall"
+  ; Remove the PATH entry only if this installer added it.
+  ReadRegDWORD $0 HKLM "Software\${PRODUCT_NAME}" "AddedToPath"
+  ${If} $0 == 1
+    System::Call 'Kernel32::SetEnvironmentVariable(t "SYSRECON_DIR", t "$INSTDIR")i'
+    nsExec::ExecToLog 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$d=$$env:SYSRECON_DIR; $$p=[Environment]::GetEnvironmentVariable(\"Path\",\"Machine\"); $$parts=@($$p -split \";\" | Where-Object { $$_ -ne \"\" -and $$_ -ne $$d }); [Environment]::SetEnvironmentVariable(\"Path\", ($$parts -join \";\"), \"Machine\")"'
+    Pop $0
+  ${EndIf}
+
   ; Remove files
   Delete "$INSTDIR\sysrecon.exe"
   Delete "$INSTDIR\config.json"
   Delete "$INSTDIR\README.md"
   Delete "$INSTDIR\README.txt"
   Delete "$INSTDIR\LICENSE"
+  Delete "$INSTDIR\sysrecon.log"
   Delete "$INSTDIR\Uninstall.exe"
   
   ; Remove example configs
   RMDir /r "$INSTDIR\configs"
   
-  ; Ask before removing reports
+  ; Ask before removing reports. IfSilent is required: NSIS still displays a
+  ; MessageBox during a silent uninstall, so /S would block here forever
+  ; waiting for a click -- which breaks any managed deployment. Silent
+  ; uninstall keeps reports, since they are the user's data.
+  IfSilent skip_reports
   MessageBox MB_YESNO|MB_ICONQUESTION "Do you want to delete all generated reports?" IDNO skip_reports
   RMDir /r "$INSTDIR\reports"
   skip_reports:
@@ -269,15 +357,20 @@ Section "Uninstall"
   DeleteRegKey ${PRODUCT_UNINST_ROOT_KEY} "${PRODUCT_UNINST_KEY}"
   DeleteRegKey HKLM "Software\${PRODUCT_NAME}"
   
-  ; Final message
+  ; Final message (skipped under /S, which must not require interaction)
+  IfSilent uninstall_done
   MessageBox MB_OK "${PRODUCT_NAME} has been successfully uninstalled."
+  uninstall_done:
 SectionEnd
 
 ;--------------------------------
 ; Uninstaller Functions
 
 Function un.onInit
-  MessageBox MB_YESNO|MB_ICONQUESTION "Are you sure you want to uninstall ${PRODUCT_NAME}?" IDYES continue
+  ; /SD IDYES: under /S, MessageBox still blocks unless given a silent default.
+  ; Without it `Uninstall.exe /S` waited forever on this prompt, before the
+  ; IfSilent guards in the uninstall section were ever reached.
+  MessageBox MB_YESNO|MB_ICONQUESTION "Are you sure you want to uninstall ${PRODUCT_NAME}?" /SD IDYES IDYES continue
   Abort
   continue:
 FunctionEnd

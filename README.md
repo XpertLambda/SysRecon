@@ -1,22 +1,10 @@
 # SysRecon - Windows Security Audit & Reconnaissance Tool
 
-[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](https://github.com/XpertLambda/SysRecon/releases)
+[![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)](https://github.com/XpertLambda/SysRecon/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010/11%20|%20Server%202016+-blue.svg)](https://github.com/XpertLambda/SysRecon)
 [![Language](https://img.shields.io/badge/language-C++20-orange.svg)](https://github.com/XpertLambda/SysRecon)
 [![License](https://img.shields.io/badge/license-Commercial-red.svg)](LICENSE)
 [![Build](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/XpertLambda/SysRecon)
-
-## 🛡️ Phase 2 — Penetration-Testing Assessment Release
-
-SysRecon 2.0.0 adds a dedicated **privilege-escalation assessment** engine for
-authorised penetration testers and defenders. Every finding is reported with a
-concrete **remediation** step and a **MITRE ATT&CK** reference, so the same run
-that surfaces a weakness also tells you how to close it.
-
-> **Authorised use only.** SysRecon is a read-only assessment tool. Run it only
-> on systems you own or are explicitly authorised to test.
-
----
 
 **Professional-grade security auditing and reconnaissance solution for Windows environments**
 
@@ -33,6 +21,7 @@ that surfaces a weakness also tells you how to close it.
 - [Command Reference](#command-reference)
 - [Output & Reporting](#output--reporting)
 - [Use Cases](#use-cases)
+- [Windows Hardening](#windows-hardening)
 - [Build Instructions](#build-instructions)
 - [Building the Installer](#building-the-installer)
 - [Distribution](#distribution)
@@ -48,11 +37,11 @@ SysRecon is an enterprise-class security assessment platform designed to provide
 ### Key Differentiators
 
 - **Comprehensive Coverage**: Seven specialized assessment modules covering user accounts, services, processes, network infrastructure, registry configurations, memory forensics, and local privilege escalation
-- **Actionable by Design**: Each finding carries a remediation step and a MITRE ATT&CK reference, turning raw audit data into a prioritized fix list
-- **Pentest-Grade Checks**: Unquoted/weak-ACL services, world-writable service binaries, writable `PATH` directories, `AlwaysInstallElevated`, UAC posture, and stored-credential exposure
+- **Actionable by Design**: Privilege-escalation findings carry a remediation step and a MITRE ATT&CK reference, turning raw audit output into a prioritized fix list
 - **Enterprise Architecture**: Built with C++20 for optimal performance and minimal system footprint
 - **Flexible Deployment**: Cross-platform compilation support with native Windows execution
-- **Professional Reporting**: Multi-format output (JSON, CSV, HTML) with an executive summary, weighted risk score, and severity-ranked findings
+- **Professional Reporting**: Multi-format output including JSON, CSV, and HTML with executive summaries and detailed technical findings
+- **Tested**: about 8,500 lines of C++ with 94 unit tests and end-to-end CI on real Windows (Server 2022 and Windows 11)
 
 ---
 
@@ -71,7 +60,7 @@ SysRecon is an enterprise-class security assessment platform designed to provide
 
 - Complete Windows service inventory through Service Control Manager integration
 - Startup configuration analysis (Automatic, Manual, Disabled, Delayed)
-- Detection of unquoted service paths—a critical privilege escalation vector
+- Detection of unquoted service paths-a critical privilege escalation vector
 - Service account security posture evaluation
 - Binary signature verification and path validation
 
@@ -95,35 +84,43 @@ SysRecon is an enterprise-class security assessment platform designed to provide
 #### Registry Security Analysis
 
 - Persistence mechanism detection across standard autorun locations
-- Security policy configuration review (UAC, Windows Defender, BitLocker)
+- Security policy review: User Account Control disabled (`EnableLUA = 0`)
 - Registry permission and ACL analysis
-- Browser Helper Object (BHO) and toolbar detection
+- Image File Execution Options debugger hijacks
 - Image File Execution Options (IFEO) monitoring for debugger attachments
 - Run/RunOnce key enumeration across HKLM and HKCU hives
 
 #### Memory Forensics & Analysis
 
-- Process memory region enumeration via VirtualQueryEx
-- Detection of Read-Write-Execute (RWX) memory regions—indicators of code injection
-- DLL injection pattern recognition
-- Process hollowing detection through PE header validation
-- Shellcode signature matching using pattern analysis
-- Memory-resident threat identification
+- Injection detection: a PE image in private (non-file-backed) executable
+  memory, the signature of a reflectively loaded module
+- Process hollowing detection: the main image base backed by private rather
+  than image memory
+- Verified Windows system processes (name **and** path) are skipped
 
-#### Privilege Escalation Assessment (Phase 2)
+> **Current limitation:** the RWX-region check, the shellcode/malware scan and
+> evidence dumps (`memory.create_dumps`) exist in the code but are not reached
+> by any scan path in this version. See CHANGELOG "Known limitations".
 
-Read-only, host-local checks for the most common Windows local-privilege-escalation
-vectors. Every finding includes concrete remediation and a MITRE ATT&CK reference.
+#### Privilege Escalation Assessment
 
-- **Unquoted service paths** with writable intermediate directories (T1574.009)
-- **Weak service DACLs** — `SERVICE_CHANGE_CONFIG` / full control granted to low-privilege principals (T1543.003)
-- **World-writable service binaries / directories** that run as SYSTEM (T1574.010)
-- **`AlwaysInstallElevated`** enabled in both HKLM and HKCU (T1548.002)
-- **Writable `PATH` directories** enabling binary/DLL search-order hijacking (T1574.007)
-- **Autorun entries** pointing at user-writable targets (T1547.001)
-- **Cleartext autologon credentials** in the registry (T1552.002)
-- **UAC posture** — `EnableLUA`, `LocalAccountTokenFilterPolicy` (T1548.002 / T1550.002)
-- **Leftover unattend / sysprep answer files** that may contain credentials (T1552.001)
+Read-only, host-local checks for the local privilege-escalation and
+misconfiguration vectors a pen-tester checks first. Each finding includes a
+remediation step and a MITRE ATT&CK reference, and the categories can be toggled
+under `modules.privesc.*` in `config.json`.
+
+- Unquoted service paths with a hijackable, writable prefix (T1574.009)
+- Weak service DACLs granting reconfiguration rights to non-admins (T1543.003)
+- World-writable service binaries / directories run as SYSTEM (T1574.010)
+- `AlwaysInstallElevated` enabled in both HKLM and HKCU (T1548.002)
+- Writable directories on `%PATH%` (binary/DLL planting) (T1574.007)
+- Autorun targets writable by non-admins (T1547.001)
+- Cleartext autologon credentials in the registry (T1552.002)
+- UAC posture: `EnableLUA`, `LocalAccountTokenFilterPolicy` (T1548.002 / T1550.002)
+- Leftover unattended-install answer files (T1552.001)
+
+> SysRecon never exploits a finding or extracts a secret: credential checks
+> report presence and location only.
 
 ### Reporting & Intelligence
 
@@ -157,10 +154,10 @@ vectors. Every finding includes concrete remediation and a MITRE ATT&CK referenc
 |-----------|--------------|
 | **Language** | C++20 with modern standard library features |
 | **Build System** | CMake 3.20+ for cross-platform compilation |
-| **Target OS** | Windows 10, Windows 11, Server 2016/2019/2022 |
+| **Target OS** | Windows 10/11 and Windows Server 2016+ (x64). Tested in CI on Windows Server 2022 and Windows 11 |
 | **Architecture** | x64 (64-bit) only |
-| **Compiler** | MinGW-w64 GCC 15.2.0 (cross-compilation) or MSVC 2022 (native) |
-| **Binary Format** | PE32+ executable with code signing support |
+| **Compiler** | MinGW-w64 GCC (cross-compilation, release builds) or MSVC 2022 (native; built and unit-tested in CI) |
+| **Binary Format** | PE32+ executable (release binaries are not currently signed) |
 | **Dependencies** | nlohmann/json 3.11.3 (header-only, embedded) |
 | **Binary Size** | ~18 MB (optimized release build) |
 
@@ -169,31 +166,27 @@ vectors. Every finding includes concrete remediation and a MITRE ATT&CK referenc
 SysRecon leverages native Windows APIs for maximum compatibility and performance:
 
 **Security & Identity**
-- `NetUserEnum`, `NetLocalGroupEnum`, `NetLocalGroupGetMembers`
-- `LookupAccountSid`, `LookupAccountName`
-- `GetTokenInformation`, `OpenProcessToken`
+- `NetUserEnum`, `NetUserModalsGet`, `NetLocalGroupEnum`, `NetLocalGroupGetMembers`
+- `LookupAccountSid`, `LookupAccountName`, `CheckTokenMembership`
+- `OpenProcessToken`, `AdjustTokenPrivileges`, `SetNamedSecurityInfo`
 
 **Service Management**
-- `OpenSCManager`, `EnumServicesStatusEx`, `QueryServiceConfig`
-- `QueryServiceConfig2`, `QueryServiceStatus`
+- `OpenSCManager`, `EnumServicesStatusEx`, `QueryServiceConfig`, `QueryServiceStatus`
 
 **Process & Memory**
 - `CreateToolhelp32Snapshot`, `Process32First`, `Process32Next`
-- `Module32First`, `Module32Next`
+- `Module32First`, `Module32Next`, `QueryFullProcessImageName`
 - `VirtualQueryEx`, `ReadProcessMemory`, `OpenProcess`
 
 **Network Operations**
-- `GetTcpTable2`, `GetUdpTable`, `GetExtendedUdpTable`
-- `GetAdaptersInfo`, `GetAdaptersAddresses`
-- `NetShareEnum`, `NetShareGetInfo`
+- `GetTcpTable2`, `GetExtendedUdpTable`, `GetAdaptersInfo`, `NetShareEnum`
 
 **Registry Access**
 - `RegOpenKeyEx`, `RegEnumValue`, `RegEnumKeyEx`
 - `RegGetKeySecurity`, `RegQueryValueEx`
 
 **System Information**
-- `GetComputerName`, `GetVersionEx`, `GetSystemInfo`
-- `GetNativeSystemInfo`, `IsWow64Process`
+- `GetComputerName`, `RtlGetVersion`, `GetSystemInfo`, `IsWow64Process`
 
 ---
 
@@ -260,20 +253,20 @@ SysRecon includes a professional Windows installer with full GUI for easy deploy
 ✅ **Graphical Installation Wizard** - Click-through setup like professional software  
 ✅ **Start Menu Integration** - Multiple shortcuts (main app, help, quick scan, reports)  
 ✅ **Desktop Shortcut** - Optional quick access from desktop  
-✅ **PATH Integration** - Optional command-line access from anywhere  
-✅ **Automatic Configuration** - Sets up reports directory and default config  
-✅ **Professional Uninstaller** - Complete removal with option to keep reports  
+✅ **PATH Integration** - Optional (off by default) machine-PATH entry, removed again on uninstall  
+✅ **Automatic Configuration** - Sets up reports directory and default config; an upgrade keeps your edited `config.json` (the shipped default stays in `configs\default.json`)  
+✅ **Professional Uninstaller** - Complete removal with option to keep reports; `Uninstall.exe /S` runs fully unattended  
 
 #### Quick Start:
 
-1. Download `SysRecon-Setup-1.0.0.exe` from releases
+1. Download `SysRecon-Setup-1.2.0.exe` from releases
 2. Right-click → **"Run as Administrator"**
 3. Follow the installation wizard
 4. Launch from Start Menu → SysRecon
 
 #### Building the Installer:
 
-See **[INSTALLER_GUIDE.md](INSTALLER_GUIDE.md)** for complete documentation.
+See the [Building the Installer](#building-the-installer) section below for complete documentation.
 
 **Windows:**
 ```cmd
@@ -284,7 +277,7 @@ build.bat
 REM Create installer
 build-installer.bat
 
-REM Result: SysRecon-Setup-1.0.0.exe
+REM Result: SysRecon-Setup-1.2.0.exe
 ```
 
 **Linux (Cross-compilation):**
@@ -299,7 +292,7 @@ sudo apt install nsis  # Ubuntu
 # Create installer
 ./build-installer.sh
 
-# Result: SysRecon-Setup-1.0.0.exe (transfer to Windows)
+# Result: SysRecon-Setup-1.2.0.exe (transfer to Windows)
 ```
 
 ---
@@ -353,7 +346,7 @@ sysrecon.exe
 
 **Interactive Menu Features:**
 - 🎯 **User-Friendly Interface**: Navigate through options with simple number selections
-- ✅ **Option Validation**: All menu options are tested and guaranteed to work
+- ✅ **Option Validation**: Menu input is range-checked and re-prompts on invalid entries
 - 📋 **Module Selection**: Easily choose which security modules to run
 - ⚙️ **Configuration**: Change settings without remembering command-line syntax
 - 📊 **Report Options**: Select output formats visually
@@ -388,13 +381,30 @@ sysrecon.exe
 
 Launches the interactive menu. For command-line usage, see examples below.
 
-To run a full scan via command-line:
+To scan from the command line without the menu, pass any option. With no
+module flag, the modules enabled in `config.json` run (everything except
+Memory in the shipped config):
 
 ```cmd
-sysrecon.exe --accounts --services --processes --network --registry --memory
+sysrecon.exe --verbose
 ```
 
-Executes a comprehensive security assessment across all modules with default configuration.
+To include every module, Memory too:
+
+```cmd
+sysrecon.exe --all
+```
+
+**Configuration lookup.** Without `-c`, SysRecon uses `.\config.json` from the
+working directory, then `config.json` next to `sysrecon.exe`. That second
+location means an installed copy finds its config even from an elevated
+prompt that starts in `C:\Windows\System32`. A relative `output_directory` in
+the config is resolved against the config file's folder, so the installed
+default writes to `C:\Program Files\SysRecon\reports`. If no config is found,
+built-in defaults apply, and they also keep Memory off. A config file that
+exists but is invalid (bad JSON, wrong value types, failed validation) stops
+the run with the specific errors listed. Unknown or removed settings are
+reported as warnings.
 
 #### Quick Assessment Mode
 
@@ -402,7 +412,8 @@ Executes a comprehensive security assessment across all modules with default con
 sysrecon.exe --quick
 ```
 
-Performs accelerated scanning with reduced depth—ideal for rapid initial reconnaissance.
+Runs the essential checks only: local users, services, listening ports,
+firewall state and Run keys. Processes and Memory are skipped.
 
 #### Verbose Diagnostic Mode
 
@@ -434,7 +445,15 @@ sysrecon.exe --registry
 
 REM Memory forensics and injection detection
 sysrecon.exe --memory
+
+REM Local privilege-escalation assessment
+sysrecon.exe --privesc
 ```
+
+A module flag **replaces** the config file's module selection, so
+`sysrecon.exe --memory` runs the Memory module even though the shipped config
+disables it. Before this fix, a module disabled in the config could not be
+turned back on from the command line.
 
 #### Combined Module Scanning
 
@@ -468,9 +487,12 @@ sysrecon.exe --format html
 REM Multiple formats
 sysrecon.exe --format json --format html
 
-REM All formats (default)
+REM All formats
 sysrecon.exe --format all
 ```
+
+Without `--format`, the `output.generate_json` / `generate_csv` /
+`generate_html` settings in `config.json` decide (all three by default).
 
 #### Comprehensive Example
 
@@ -489,7 +511,17 @@ sysrecon.exe --accounts --services --network ^
 sysrecon.exe --stealth --quiet
 ```
 
-Minimizes system footprint and suppresses console output—useful for sensitive environments or systems under active monitoring.
+Low-footprint mode for production hosts. Concretely, stealth mode:
+
+- turns off console logging (the log file and reports are still written);
+- skips the per-process loaded-DLL snapshots, which open a handle to every
+  process;
+- never runs the Memory module, even when it is requested with `--memory` or
+  `--all`.
+
+It does not hide SysRecon from EDR and makes no attempt to; it only leaves out
+the checks that touch other processes. `general.stealth_mode` in `config.json`
+turns it on as well.
 
 #### Compliance Scanning
 
@@ -512,16 +544,16 @@ Leverages custom configuration profiles for compliance-specific assessments.
 | `-v, --version` | Display version information and build details |
 | `--verbose` | Enable detailed diagnostic output and API call logging |
 | `--quiet` | Suppress all non-critical console output |
-| `--quick` | Enable fast-scan mode with reduced analysis depth |
-| `--stealth` | Minimize system footprint and detection signatures |
+| `--quick` | Essential checks only (users, services, listening ports, firewall, Run keys) |
+| `--stealth` | Low-footprint scan: no console log, no per-process DLL snapshots, no Memory module |
 
 ### Configuration Options
 
 | Option | Argument | Description |
 |--------|----------|-------------|
-| `-c, --config` | `<file>` | Load configuration from JSON file (default: config.json) |
-| `-o, --output` | `<directory>` | Set output directory for reports (default: ./reports) |
-| `-f, --format` | `<format>` | Report format: `json`, `csv`, `html`, `all` (default: all) |
+| `-c, --config` | `<file>` | Load configuration from a JSON file. Default: `.\config.json`, then `config.json` next to `sysrecon.exe`. A missing or invalid explicit file is an error |
+| `-o, --output` | `<directory>` | Output directory (default: the config's `output_directory`, resolved against the config file's folder) |
+| `-f, --format` | `<format>` | Report format: `json`, `csv`, `html`, `all` (default: the config's `generate_*` settings) |
 
 ### Module Selection
 
@@ -532,17 +564,30 @@ Leverages custom configuration profiles for compliance-specific assessments.
 | `--processes` | Running Processes | Process enumeration, module loading, memory footprint |
 | `--network` | Network Infrastructure | Connections, interfaces, shares, firewall rules |
 | `--registry` | Registry Analysis | Persistence keys, security policies, ACL analysis |
-| `--memory` | Memory Forensics | Memory scanning, injection detection, shellcode analysis |
-| `--privesc` | Privilege Escalation | Unquoted/weak-ACL services, writable binaries & PATH, AlwaysInstallElevated, UAC, stored credentials |
-| `--all` | All Modules | Comprehensive assessment (default if no modules specified) |
+| `--memory` | Memory Forensics | Injection and process-hollowing detection (see the limitation note under Memory Forensics) |
+| `--all` | All Modules | All six modules, including Memory |
+
+Without any module flag, the modules enabled in `config.json` run. With one or
+more flags, exactly those modules run, whatever the config says.
+
+### Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Scan completed and every requested report was written. Checks that could not complete are listed under **Incomplete Checks** in each report |
+| `1` | Invalid arguments, missing or invalid config file, no modules selected, initialization failure (including `require_admin` without elevation), or a report that could not be written |
 
 ### Advanced Options
 
-| Option | Description |
-|--------|-------------|
-| `--no-admin-check` | Skip administrator privilege verification (not recommended) |
-| `--timeout <seconds>` | Set maximum execution time per module (default: 300) |
-| `--threads <count>` | Set thread pool size for parallel operations (default: 4) |
+Administrator enforcement is controlled by `general.require_admin` in
+`config.json` rather than a command-line flag. It is applied only when a
+configuration file is actually loaded.
+
+> **Note:** SysRecon executes its modules sequentially and does not enforce
+> per-module timeouts. Earlier documentation described `--threads` and
+> `--timeout` options; no such options existed, and the corresponding
+> `max_threads` / `timeout_seconds` settings have been removed from
+> `config.json` rather than left as settings that do nothing. See the Roadmap.
 
 ---
 
@@ -554,53 +599,60 @@ Leverages custom configuration profiles for compliance-specific assessments.
 
 **Purpose**: Machine-readable structured data for SIEM integration, API consumption, and automated analysis workflows.
 
-**Schema**:
+**Structure** (abridged from a real report; findings are sorted by severity):
 ```json
 {
-  "metadata": {
-    "scan_id": "uuid-v4",
-    "timestamp": "2025-11-13T14:25:30Z",
+  "scan_info": {
+    "version": "1.2.0",
+    "timestamp": "20261101_212458",
     "hostname": "WORKSTATION-01",
-    "os_version": "Windows 10 Enterprise 21H2",
-    "os_build": "19044.1234",
-    "domain": "CORPORATE",
-    "scan_duration_seconds": 142,
-    "modules_executed": ["accounts", "services", "network"]
+    "os_version": "Windows 11 (Build 22631)",
+    "current_user": "analyst",
+    "elevated": true,
+    "stealth_mode": false,
+    "config": "C:\\Program Files\\SysRecon\\config.json",
+    "modules": ["Accounts", "Services", "Processes", "Network", "Registry"],
+    "total_findings": 37
   },
-  "findings": [
+  "system_info": {
+    "computer_name": "WORKSTATION-01",
+    "os_version": "Windows 11 (Build 22631)",
+    "architecture": "x64"
+  },
+  "results": [
     {
-      "module": "accounts",
-      "severity": "high",
-      "category": "privilege_escalation",
-      "title": "Administrator Account Enabled",
-      "description": "Built-in Administrator account is active and not renamed",
-      "affected_item": "Administrator",
-      "recommendation": "Rename or disable the built-in Administrator account",
-      "references": ["CIS Windows Benchmark 1.1.4"]
+      "module": "Account Policy",
+      "item": "Minimum password length",
+      "description": "Minimum password length is below the CIS baseline",
+      "risk_level": "Medium",
+      "details": {
+        "Current": "7",
+        "Recommended (CIS L1)": ">= 14",
+        "Remediation": "Invoke-SysReconHardening.ps1 -Include AccountPolicy",
+        "Technique": "T1110 Brute Force"
+      }
     }
   ],
-  "statistics": {
-    "total_findings": 24,
-    "by_severity": {
-      "critical": 2,
-      "high": 8,
-      "medium": 10,
-      "low": 4
-    }
-  }
+  "summary": { "critical": 0, "high": 3, "medium": 9, "low": 25, "total": 37 },
+  "incomplete_checks": []
 }
 ```
+
+`incomplete_checks` lists every check that failed or could not run (for
+example without Administrator rights). An empty array means every selected
+check completed.
 
 #### CSV Output
 
 **Purpose**: Spreadsheet analysis, database import, and business intelligence tools.
 
-**Structure**:
+**Structure**: UTF-8 with BOM; every field quoted per RFC 4180 and protected
+against spreadsheet formula injection. Details are joined as `key: value; ...`.
+Incomplete checks appear as extra rows with module `SysRecon`.
 ```csv
-Module,Severity,Category,Title,Item,Recommendation
-accounts,high,privilege_escalation,Administrator Account Enabled,Administrator,Rename or disable built-in Administrator
-services,medium,configuration,Unquoted Service Path,BackupService,Quote the service executable path
-registry,high,persistence,Unauthorized Autorun Entry,HKLM\...\Run\malware,Remove unauthorized autorun entry
+Module,Item,Risk Level,Description,Details
+"Account Policy","Minimum password length","Medium","Minimum password length is below the CIS baseline","Current: 7; Recommended (CIS L1): >= 14; ..."
+"Services","BackupService","High","Service: BackupService","Binary Path: C:\Program Files\Backup\svc.exe; Unquoted Path: Yes - Potential binary hijacking risk; ..."
 ```
 
 #### HTML Output
@@ -746,14 +798,69 @@ REM Compare with baseline
 
 ---
 
+## Windows Hardening
+
+SysRecon audits; it does not change the system. To **act** on what it finds,
+the project ships a separate, opt-in hardening script that applies a **CIS
+Level 1 (workstation)-aligned** baseline:
+
+```
+hardening/Invoke-SysReconHardening.ps1
+```
+
+`sysrecon.exe` stays strictly read-only. This PowerShell script is the *only*
+component that writes to the OS - it is deliberately separate and elevated so
+the audit tool keeps its read-only guarantee.
+
+### The closed loop
+
+```powershell
+sysrecon.exe                              # 1. audit  -> findings
+.\hardening\Invoke-SysReconHardening.ps1  # 2. PREVIEW the fixes (changes nothing)
+.\hardening\Invoke-SysReconHardening.ps1 -Apply   # 3. back up, then remediate
+sysrecon.exe                              # 4. re-audit -> confirm findings cleared
+```
+
+### Safe on fresh *and* already-used installs
+
+The script is built around four guarantees, not bolt-ons:
+
+- **Preview by default.** Nothing changes without `-Apply`. The default run
+  prints the exact `current -> desired` change set and touches nothing.
+- **Reversible.** Before the first change it writes a timestamped backup bundle
+  (registry exports, `secedit`/`auditpol`/firewall exports) and attempts a
+  System Restore point. Undo with `-Rollback <bundle>`.
+- **Idempotent.** Each control writes only on drift; a second `-Apply` on a
+  hardened host reports zero changes.
+- **Scoped.** `-Level 1` (default) is designed not to break normal use.
+  `-Level 2` and destructive controls (`-EnableBitLocker`, `-DisableRDP`,
+  `-EnableCredentialGuard`) are opt-in behind explicit switches.
+
+### What it covers
+
+Windows Firewall · SMBv1 removal and SMB signing · UAC · legacy-auth hardening
+(NTLMv2-only, WDigest, LLMNR/NBT-NS, anonymous access) · password & lockout
+policy · Guest account · Microsoft Defender and 15 Attack Surface Reduction
+rules · AutoRun/AutoPlay · advanced audit policy (incl. process-creation
+command line) · PowerShell logging · LSA protection · interactive-logon
+lockdown · RDP hardening. See **[docs/HARDENING.md](docs/HARDENING.md)** for the
+full control catalogue with CIS references, per-control breakage notes, the
+rollback runbook, and the VM validation checklist.
+
+> **Honest scope.** This is a pragmatic scripted subset of CIS L1 for a
+> standalone workstation - not a replacement for full CIS-CAT tooling or the
+> Microsoft Security Baseline GPOs, and it does not claim to secure
+> "everything." It has been syntax- and lint-checked and its logic unit-tested,
+> but **not yet run end-to-end on a live Windows host by us**; validate on a VM
+> (fresh + used snapshots) before production use.
+
+---
+
 ## Build Instructions
 
-> **📘 For Complete Build Guide**: See [BUILD_GUIDE.md](BUILD_GUIDE.md) for comprehensive instructions including:
-> - Detailed Linux cross-compilation steps
-> - Windows native build instructions
-> - NSIS installer creation
-> - Distribution package creation
-> - Troubleshooting common issues
+> **📘 Build Guide**: The sections below cover Linux cross-compilation, Windows
+> native builds, NSIS installer creation, distribution packaging, and
+> troubleshooting.
 
 ### Quick Start: Building on Linux
 
@@ -872,7 +979,7 @@ makensis -VERSION  # Should show v3.11 or higher
 # 2. Run installer build script
 ./build-installer.sh
 
-# Output: SysRecon-Setup-1.1.0.exe (~3.9 MB)
+# Output: SysRecon-Setup-1.2.0.exe (~3.9 MB)
 ```
 
 **What the installer includes:**
@@ -893,7 +1000,7 @@ makensis -VERSION  # Should show v3.11 or higher
 
 **Option 1: Windows Installer (Recommended) ⭐**
 ```
-📦 SysRecon-Setup-1.1.0.exe  (3.9 MB)
+📦 SysRecon-Setup-1.2.0.exe  (3.9 MB)
    - Complete installation package
    - Professional setup wizard
    - Easy uninstallation
@@ -901,7 +1008,7 @@ makensis -VERSION  # Should show v3.11 or higher
 
 **Option 2: Portable Package**
 ```
-📦 SysRecon-1.1.0-Portable.zip  (~17 MB)
+📦 SysRecon-1.2.0-Portable.zip  (~17 MB)
    ├── sysrecon.exe          # Main executable
    ├── config.json           # Configuration
    ├── README.md             # Documentation
@@ -912,7 +1019,7 @@ makensis -VERSION  # Should show v3.11 or higher
 **Option 3: Both (Complete Distribution)**
 ```
 Upload to GitHub Release:
-   ├── SysRecon-Setup-1.1.0.exe    # Installer
+   ├── SysRecon-Setup-1.2.0.exe    # Installer
    ├── sysrecon.exe                # Portable executable
    ├── checksums.txt               # SHA256 hashes
    └── Source code (auto-generated by GitHub)
@@ -922,11 +1029,11 @@ Upload to GitHub Release:
 
 ```bash
 # Generate SHA256 checksums for verification
-sha256sum SysRecon-Setup-1.1.0.exe > checksums.txt
+sha256sum SysRecon-Setup-1.2.0.exe > checksums.txt
 sha256sum build/sysrecon.exe >> checksums.txt
 
 # Users can verify integrity on Windows:
-# Get-FileHash -Algorithm SHA256 SysRecon-Setup-1.1.0.exe
+# Get-FileHash -Algorithm SHA256 SysRecon-Setup-1.2.0.exe
 ```
 
 ### Required Files Summary
@@ -936,7 +1043,7 @@ sha256sum build/sysrecon.exe >> checksums.txt
 - `config.json` (configuration file)
 
 **Recommended (Complete):**
-- `SysRecon-Setup-1.1.0.exe` (installer - includes everything)
+- `SysRecon-Setup-1.2.0.exe` (installer - includes everything)
 - `checksums.txt` (file verification)
 - Documentation (README, CHANGELOG)
 
@@ -996,12 +1103,10 @@ SysRecon/
 │
 ├── cmake/                      # Build system configuration
 │   ├── mingw-w64-x86_64.cmake # MinGW-w64 cross-compilation toolchain
-│   └── Windows.cmake           # Windows-specific build settings
+│   └── version.h.in           # Version header template
 │
 ├── docs/                       # Documentation
-│   ├── API.md                 # API reference documentation
-│   ├── SECURITY.md            # Security considerations
-│   └── COMPLIANCE.md          # Compliance framework mappings
+│   └── HARDENING.md           # Windows hardening control catalogue
 │
 ├── external/                   # Third-party dependencies
 │   └── json/                  # nlohmann::json (embedded)
@@ -1012,74 +1117,57 @@ SysRecon/
 │   ├── core/                  # Core infrastructure headers
 │   │   ├── engine.h           # Scanning engine
 │   │   ├── config.h           # Configuration management
-│   │   └── logger.h           # Logging subsystem
+│   │   ├── logger.h           # Logging subsystem
+│   │   ├── text_utils.h       # Text/encoding helpers
+│   │   ├── utils.h            # Shared utilities
+│   │   └── whitelist.h        # Whitelist matching
 │   │
 │   └── modules/               # Module interface headers
-│       ├── accounts.h
-│       ├── services.h
-│       ├── processes.h
-│       ├── network.h
-│       ├── registry.h
-│       ├── memory.h
-│       └── reporting.h
+│       ├── accounts/user_enum.h
+│       ├── services/service_enum.h
+│       ├── processes/process_enum.h
+│       ├── network/network_enum.h
+│       ├── registry/registry_analyzer.h
+│       ├── memory/memory_analyzer.h
+│       └── reporting/report_generator.h
 │
 ├── modules/                    # Module implementations
-│   ├── accounts/              # User account enumeration
-│   │   ├── accounts.cpp
-│   │   └── sid_resolver.cpp
-│   │
-│   ├── services/              # Service analysis
-│   │   ├── services.cpp
-│   │   └── unquoted_paths.cpp
-│   │
-│   ├── processes/             # Process monitoring
-│   │   ├── processes.cpp
-│   │   └── modules.cpp
-│   │
-│   ├── network/               # Network assessment
-│   │   ├── network.cpp
-│   │   ├── interfaces.cpp
-│   │   ├── shares.cpp
-│   │   └── firewall.cpp
-│   │
-│   ├── registry/              # Registry analysis
-│   │   ├── registry.cpp
-│   │   ├── persistence.cpp
-│   │   └── policies.cpp
-│   │
-│   ├── memory/                # Memory forensics
-│   │   ├── memory.cpp
-│   │   ├── injection.cpp
-│   │   └── shellcode.cpp
-│   │
-│   └── reporting/             # Report generation
-│       ├── json_reporter.cpp
-│       ├── csv_reporter.cpp
-│       └── html_reporter.cpp
+│   ├── accounts/user_enum.cpp         # User account enumeration
+│   ├── services/service_enum.cpp      # Service analysis
+│   ├── processes/process_enum.cpp     # Process monitoring
+│   ├── network/network_enum.cpp       # Network assessment
+│   ├── registry/registry_analyzer.cpp # Registry analysis
+│   ├── memory/memory_analyzer.cpp     # Memory forensics
+│   └── reporting/report_generator.cpp # Report generation
 │
 ├── src/                        # Core application source
 │   ├── main.cpp               # Application entry point
-│   ├── core/                  # Core implementation
-│   │   ├── engine.cpp
-│   │   ├── config.cpp
-│   │   └── logger.cpp
-│   │
-│   └── cli/                   # Command-line interface
-│       └── cli_parser.cpp
+│   └── core/                  # Core implementation
+│       ├── engine.cpp         # Scan lifecycle (Windows)
+│       ├── utils.cpp          # Win32 helpers (Windows)
+│       ├── config.cpp         # ┐
+│       ├── logger.cpp         # │
+│       ├── scan_plan.cpp      # │ sysrecon_core: portable,
+│       ├── text_utils.cpp     # │ unit-tested natively
+│       └── utils_common.cpp   # ┘
 │
-├── tests/                      # Unit and integration tests
-│   ├── test_accounts.cpp
-│   ├── test_services.cpp
-│   ├── test_processes.cpp
-│   ├── test_network.cpp
-│   ├── test_registry.cpp
-│   ├── test_memory.cpp
-│   └── test_reporting.cpp
+├── tests/                      # Unit and regression tests (sysrecon_core)
+│   ├── test_core.cpp           # Utils, UTF-8 codec, Logger
+│   ├── test_config.cpp         # config.json parsing and validation
+│   ├── test_scan_plan.cpp      # Module/format/config-path precedence
+│   ├── test_text_utils.cpp     # IPv4, registry buffers, file names
+│   ├── test_report_escaping.cpp
+│   └── test_whitelist.cpp
+│
+├── hardening/                  # Opt-in Windows hardening companion
+│   ├── Invoke-SysReconHardening.ps1
+│   └── PSScriptAnalyzerSettings.psd1
 │
 ├── build/                      # Build output (git-ignored)
 │   └── sysrecon.exe           # Compiled executable
 │
 ├── CMakeLists.txt             # Root CMake configuration
+├── installer.nsi              # NSIS installer script
 ├── README.md                  # This file
 ├── LICENSE                    # License information
 ├── CHANGELOG.md               # Version history
@@ -1091,13 +1179,13 @@ SysRecon/
 #### Modularity
 Each assessment capability is encapsulated in an independent module with well-defined interfaces, enabling:
 - Selective module execution
-- Parallel processing where applicable
 - Easy extension with new assessment capabilities
 
 #### Performance
 - **Minimal Footprint**: Compiled to native x64 code with no runtime dependencies
-- **Efficient Memory Usage**: Streaming report generation prevents memory exhaustion
-- **Parallel Execution**: Thread pool architecture for concurrent module execution
+- **Sequential Execution**: Modules run one after another. There is no thread
+  pool and no concurrency; a slow module (for example memory analysis on a busy
+  host) extends the total scan time. Parallel execution is on the roadmap.
 
 #### Reliability
 - **Error Handling**: Comprehensive exception handling and graceful degradation
@@ -1159,10 +1247,8 @@ Misuse of this tool for unauthorized access, malicious purposes, or any illegal 
 ## Additional Resources
 
 ### Documentation
-- [API Reference](docs/API.md)
-- [Security Considerations](docs/SECURITY.md)
-- [Compliance Mappings](docs/COMPLIANCE.md)
-- [Troubleshooting Guide](docs/TROUBLESHOOTING.md)
+- [Windows Hardening Guide](docs/HARDENING.md)
+- [Changelog](CHANGELOG.md)
 
 ### Windows Security References
 - [Microsoft Security Documentation](https://docs.microsoft.com/en-us/windows/security/)
@@ -1185,22 +1271,19 @@ Misuse of this tool for unauthorized access, malicious purposes, or any illegal 
 A: Yes, most scanning modules require elevated privileges to access system-level Windows APIs and security information.
 
 **Q: Is SysRecon safe to run?**  
-A: Yes, SysRecon is a read-only assessment tool. It does not modify system settings, install services, or perform any destructive actions.
+A: Yes. `sysrecon.exe` is a read-only assessment tool - it does not modify system settings, install services, or perform any destructive actions. The only component that writes to the system is the separate, opt-in `hardening/Invoke-SysReconHardening.ps1` script, which you must run explicitly and elevated, previews changes by default, and backs up before applying. See [Windows Hardening](#windows-hardening).
 
 **Q: Will antivirus software flag SysRecon?**  
 A: Some antivirus software may flag SysRecon due to its system scanning capabilities and use of low-level Windows APIs. This is a false positive. Enterprise deployments should whitelist the application.
 
 **Q: Can I run SysRecon on Windows Server?**  
-A: Yes, SysRecon is fully compatible with Windows Server 2016, 2019, and 2022 (x64 architecture).
+A: Yes. CI runs the full install-scan-uninstall test on Windows Server 2022 (and on Windows 11). Server 2016 and 2019 use the same APIs and are expected to work, but are not tested.
 
 **Q: Does SysRecon require internet connectivity?**  
 A: No, SysRecon operates entirely offline. It does not transmit any data or require network access.
 
 **Q: How long does a full scan take?**  
-A: Scan duration varies based on system configuration. Typical ranges:
-- Quick scan: 30-60 seconds
-- Full scan (without memory): 2-5 minutes
-- Full scan (with memory forensics): 5-15 minutes
+A: It depends on the host, mainly on the number of processes and services. The quick scan and a scan without the memory module usually take seconds; the memory module takes much longer because it walks other processes' address spaces. Every run prints its duration (`[+] Scan completed in ...`), so measure on your own estate.
 
 **Q: Can I automate SysRecon with Task Scheduler?**  
 A: Yes, SysRecon is designed for automation. Use Windows Task Scheduler to run periodic assessments with specific command-line options.
@@ -1227,7 +1310,7 @@ A: Yes, create a custom JSON configuration file and use the `--config` option. S
 A: SysRecon is not a traditional antivirus tool. It identifies indicators of compromise (IOCs) such as:
 - Unquoted service paths (privilege escalation vectors)
 - Suspicious registry persistence mechanisms
-- Memory injection patterns (RWX regions, DLL injection)
+- Memory injection patterns (reflectively loaded PE images, process hollowing)
 - Unusual process behaviors
 
 For comprehensive malware detection, use SysRecon alongside dedicated endpoint protection solutions.
@@ -1244,18 +1327,23 @@ A: SysRecon offers:
 ### Deployment Questions
 
 **Q: Can I deploy SysRecon via Group Policy?**  
-A: Yes, use Group Policy software deployment to distribute the MSI installer or portable executable across your domain.
+A: There is no MSI package. Deploy the NSIS installer silently (below) with a startup script, Intune or another software-distribution tool, or copy the portable executable and `config.json` together.
 
 **Q: Does SysRecon support silent installation?**  
-A: Yes, use the `/S` flag for silent installation:
+A: Yes. `/S` installs silently with the default components; add `/ADDTOPATH`
+to also add the install directory to the machine PATH. `/S` on the
+uninstaller removes it silently and keeps generated reports:
 ```cmd
-SysRecon-Setup-1.0.0.exe /S
+SysRecon-Setup-1.2.0.exe /S
+SysRecon-Setup-1.2.0.exe /S /ADDTOPATH
+"C:\Program Files\SysRecon\Uninstall.exe" /S
 ```
+An upgrade (`/S` over an existing install) keeps your edited `config.json`.
 
 **Q: Where are reports stored by default?**  
 A: 
 - Installed version: `C:\Program Files\SysRecon\reports\`
-- Portable version: `.\reports\` (relative to executable location)
+- Portable version: `reports\` next to `config.json`, so next to the executable when the two are kept together; `.\reports\` in the working directory if no config file is found
 
 **Q: Can I run SysRecon from a USB drive?**  
 A: Yes, use the portable executable version. Note that administrator privileges are still required on the target system.
@@ -1274,7 +1362,7 @@ A:
 **Initial Release**
 
 #### Core Features
-- ✅ Seven specialized security assessment modules (Accounts, Services, Processes, Network, Registry, Memory, Privilege Escalation)
+- ✅ Six specialized security assessment modules (Accounts, Services, Processes, Network, Registry, Memory)
 - ✅ 25+ Windows API integrations for comprehensive system visibility
 - ✅ Multi-format reporting (JSON, CSV, HTML) with risk-based color coding
 - ✅ Professional Windows installer with GUI wizard
@@ -1287,7 +1375,7 @@ A:
 - Process and module monitoring with parent-child relationship mapping
 - Network infrastructure assessment (connections, interfaces, shares, firewall)
 - Registry persistence mechanism detection and security policy analysis
-- Memory forensics (RWX region detection, DLL injection, process hollowing)
+- Memory forensics (reflectively loaded PE images, process hollowing)
 
 #### Reporting & Intelligence
 - Risk assessment framework (Critical, High, Medium, Low)
@@ -1318,23 +1406,38 @@ A:
 
 ## Roadmap
 
+### Deferred from 1.1.0
+
+These were previously present as configuration settings or declared API that the
+binary did not implement. They have been removed rather than left in place doing
+nothing, and are listed here as genuine future work:
+
+- 🔄 **Report encryption and signing**: `encrypt_output` / `sign_reports`
+  previously produced an unencrypted, unsigned report with no warning.
+- 🔄 **Parallel module execution and per-module timeouts**: `max_threads` /
+  `timeout_seconds` had no implementation behind them.
+- 🔄 **PDF / XML / plain-text reports**: JSON, CSV and HTML are supported.
+- 🔄 **Report compression**: `compress_output` was ignored.
+- 🔄 **Signed release binaries** and published checksums.
+
 ### Planned Features
 
-#### Version 1.1.0 (Q1 2026)
+#### Next release
+- 🔄 **Differential Analysis**: Compare scan results to identify configuration
+  drift - the single highest-value addition for separating signal from noise
 - 🔄 **Active Directory Integration**: Domain user enumeration and GPO analysis
 - 🔄 **Scheduled Scanning**: Built-in task scheduling without Task Scheduler
-- 🔄 **Differential Analysis**: Compare scan results to identify configuration drift
 - 🔄 **Custom Rules Engine**: User-defined detection rules and policies
 - 🔄 **PowerShell Module**: Native PowerShell cmdlets for integration
 
-#### Version 1.2.0 (Q2 2026)
+#### Later
 - 🔄 **Web Dashboard**: Central management console for multiple endpoints
 - 🔄 **Real-time Monitoring**: Continuous assessment with alerting
-- 🔄 **Remediation Actions**: Automated fix capabilities for common issues
-- 🔄 **Compliance Profiles**: Pre-built templates for major frameworks (CIS, NIST, PCI-DSS)
+- 🟡 **Remediation Actions**: A CIS L1 hardening script ships now (see [Windows Hardening](#windows-hardening)); in-tool automated remediation driven directly by findings remains future work.
+- 🟡 **Compliance Profiles**: CIS L1 (workstation) is implemented in the hardening script; NIST and PCI-DSS profiles remain future work.
 - 🔄 **Advanced Memory Analysis**: Enhanced shellcode detection and YARA rule support
 
-#### Version 2.0.0 (Q3 2026)
+#### Longer term
 - 🔄 **Cloud Integration**: Azure AD and Microsoft 365 security assessment
 - 🔄 **Container Support**: Docker and Kubernetes security scanning
 - 🔄 **API Server**: RESTful API for programmatic access
@@ -1347,35 +1450,24 @@ Want to see a specific feature? Submit a feature request via GitHub Issues.
 
 ---
 
-## Performance Benchmarks
+## Performance
 
-### Scan Duration (Average System)
+> **These are rough expectations, not measured benchmarks.** SysRecon has no
+> benchmark suite; scan time depends heavily on the number of services and
+> processes on the host, and on whether the memory module is enabled. Treat the
+> figures below as order-of-magnitude guidance and measure on your own estate.
 
-| Scan Type | Duration | Modules |
-|-----------|----------|---------|
-| Quick Scan | 30-45 seconds | Accounts, Services |
-| Standard Scan | 2-3 minutes | All except Memory |
-| Full Scan | 5-10 minutes | All modules |
-| Memory-Only Scan | 3-8 minutes | Memory forensics |
+### Scan Scope
 
-**Test System**: Windows 10 Pro, Intel Core i5-8250U, 16GB RAM, SSD
+| Scan Type | Modules |
+|-----------|---------|
+| Quick Scan (`--quick`) | Accounts (users), Services, Network (listening ports, firewall), Registry (startup keys) |
+| Full Scan (default) | All enabled modules, subject to `config.json` |
+| Memory | Disabled by default - see Operational Considerations before enabling |
 
-### Resource Usage
-
-| Metric | Quick Scan | Full Scan | Memory Scan |
-|--------|-----------|-----------|-------------|
-| CPU Usage | 5-15% | 10-25% | 15-40% |
-| Memory Usage | 50-100 MB | 100-200 MB | 200-500 MB |
-| Disk I/O | Minimal | Low | Moderate |
-
-### Scalability
-
-| System Type | Typical Scan Time | Notes |
-|-------------|-------------------|-------|
-| Workstation (< 50 services) | 2-3 minutes | Standard desktop |
-| Power User (50-100 services) | 3-5 minutes | Developer workstation |
-| Server (100-200 services) | 5-10 minutes | Domain controller, database server |
-| Enterprise Server (200+ services) | 10-15 minutes | Large application servers |
+Modules run sequentially, so total scan time is the sum of the enabled modules.
+Memory analysis dominates when enabled, because it walks the address space of
+every non-whitelisted process.
 
 ---
 
@@ -1413,8 +1505,8 @@ To the information security community for continuous research, threat intelligen
 
 ## Project Status
 
-**Current Version**: 1.0.0  
-**Release Date**: November 13, 2025  
+**Current Version**: 1.2.0  
+**Release Date**: November 1, 2026  
 **Status**: ✅ **Production-Ready**  
 **Maintenance**: 🟢 **Actively Maintained**
 
@@ -1432,17 +1524,40 @@ To the information security community for continuous research, threat intelligen
 
 | Platform | Compiler | Status |
 |----------|----------|--------|
-| Linux → Windows | MinGW-w64 GCC 15.2.0 | ✅ Passing |
-| Windows | Visual Studio 2022 (MSVC) | ✅ Passing |
-| Windows | MinGW-w64 (Native) | ✅ Passing |
+| Linux → Windows | MinGW-w64 GCC | ✅ Passing (verified in CI on every push) |
+| Windows | Visual Studio 2022 (MSVC) | ⚠️ Not verified - not covered by CI |
+| Windows | MinGW-w64 (Native) | ⚠️ Not verified - not covered by CI |
 
 ### Test Coverage
 
-- ✅ Unit tests for core modules
-- ✅ Integration tests for Windows API calls
-- ✅ Regression tests for known issues
-- ✅ Performance benchmarks
-- 🔄 Continuous integration (planned)
+- ✅ Continuous integration (GitHub Actions): native unit tests, Windows
+  cross-compile, and a wine smoke test on every push and pull request
+- ✅ Unit tests (94) for the platform-independent core (`sysrecon_core`):
+  report escaping (HTML/CSV), whitelist matching, path handling, IPv4 parsing,
+  UTF-8 conversion, `Utils`, `Logger`, `config.json` parsing and validation
+  (including the shipped file), module/format/config-path precedence, registry
+  buffer decoding and file-name sanitising
+- ✅ Regression tests pinning known security issues: report XSS, CSV formula
+  injection, whitelist evasion via masquerading, and loss of redirected output
+- ✅ CI also builds the NSIS installer (`makensis -WX`), checks that
+  interactive mode exits on end of input, and lints the hardening script with
+  PSScriptAnalyzer on a Windows runner
+- ✅ End-to-end Windows test on a GitHub `windows-latest` runner
+  (`tests/windows/smoke-test.ps1`): silent install with `/ADDTOPATH`, scans that
+  must complete with no incomplete checks, config discovery, report formats,
+  stealth and error handling, upgrade keeping `config.json`, and a silent
+  uninstall under a timeout. The script also runs by hand in a disposable VM
+- 🔄 Integration tests against live Windows APIs - currently manual, on a
+  Windows VM; see the Verification section of the delivery plan
+- ❌ Performance benchmarks - not implemented
+
+Run the suite with:
+
+```bash
+cmake -S . -B build-tests -DSYSRECON_BUILD_TESTS=ON -DSYSRECON_WERROR=ON
+cmake --build build-tests --target sysrecon_tests -j$(nproc)
+cd build-tests && ctest --output-on-failure
+```
 
 ---
 
@@ -1457,12 +1572,45 @@ To the information security community for continuous research, threat intelligen
 - No data sent to external servers
 - Reports stored locally only
 
+### Operational Considerations
+
+Read this before running SysRecon on a production or monitored host.
+
+- **It will likely trigger EDR.** The memory module opens other processes with
+  `PROCESS_VM_READ` and walks their address space - including `lsass.exe`. That
+  is the canonical credential-dumping signature, and the binary also links
+  `dbghelp` and can call `MiniDumpWriteDump`. Expect alerts, and coordinate with
+  your security team before running it. Disable the memory module
+  (`modules.memory.enabled: false`, the default) if you do not need it.
+- **Reports are sensitive.** They contain usernames, SIDs, administrator group
+  membership, full service paths, listening ports, and network interface
+  MAC/IP addresses. Each report and log file gets a protected ACL granting
+  access only to SYSTEM, Administrators and the file's owner, so a non-admin
+  colleague needs a copy. They are not encrypted or signed - SysRecon does not
+  implement at-rest encryption. Store and transfer them accordingly.
+- **Where output goes.** A relative `output_directory` in `config.json` is
+  resolved against the config file's folder, and the config is also looked up
+  next to `sysrecon.exe`, so an installed copy writes to its own `reports`
+  folder whatever the working directory. A relative `-o` is relative to the
+  working directory. With no config file at all, the default is `./reports`
+  in the working directory.
+- **Administrator rights are required for complete results.** Without them,
+  process image paths, service configuration and memory inspection are partly
+  or wholly unavailable, and SysRecon reports which checks did not complete
+  rather than silently returning a clean result.
+- **Findings are leads, not verdicts.** Detections such as "runs from a
+  user-writable location" legitimately match installers and updaters. Confirm
+  before acting.
+
 ### Security Best Practices
 
 When using SysRecon in production environments:
 
-1. **Verify Digital Signatures**: Always verify the executable signature before deployment
-2. **Secure Report Storage**: Store reports in encrypted locations with appropriate ACLs
+1. **Verify the Binary**: Check the published SHA256 of the release you
+   downloaded. Note that release binaries are not currently Authenticode-signed,
+   so SmartScreen and some EDR products will flag them.
+2. **Secure Report Storage**: Move reports to a location with restricted ACLs;
+   SysRecon does not encrypt them (see Operational Considerations above).
 3. **Access Control**: Limit SysRecon execution to authorized personnel only
 4. **Audit Logging**: Enable Windows audit logging to track SysRecon execution
 5. **Regular Updates**: Keep SysRecon updated for latest security improvements
@@ -1484,18 +1632,22 @@ If you discover a security vulnerability in SysRecon:
 
 SysRecon is built with security in mind:
 
-- ✅ **DEP (Data Execution Prevention)**: Enabled
-- ✅ **ASLR (Address Space Layout Randomization)**: Enabled
-- ✅ **Control Flow Guard (CFG)**: Enabled
-- ✅ **Input Validation**: All user inputs sanitized
-- ✅ **Safe String Handling**: No unsafe C-style string functions
-- ✅ **Exception Handling**: Comprehensive error handling throughout
+- ✅ **DEP (NX compatible)** and **ASLR (dynamic base, high-entropy VA)**: set
+  in the PE header of release builds and checked by CI on every build
+- ❌ **Control Flow Guard**: not enabled; the MinGW-w64 GCC toolchain used for
+  release builds does not emit CFG metadata
+- ✅ **Report output is inert**: every host-derived value is HTML-escaped and
+  CSV values are protected against formula injection (unit-tested)
+- ✅ **Reports and logs are access-restricted**: a protected ACL limits them to
+  SYSTEM, Administrators and the file's owner
+- ✅ **Untrusted data is bounds-checked**: registry strings, process memory
+  headers and config values are validated before use (unit-tested)
 
 ---
 
 <p align="center">
   <strong>SysRecon - Professional Windows Security Assessment Platform</strong><br>
-  <sub>Version 1.0.0 | Build 20251113 | Platform: Windows 10/11, Server 2016+</sub><br><br>
+  <sub>Version 1.2.0 | Platform: Windows 10/11, Server 2016+</sub><br><br>
   <sub>Engineered for security professionals. Built for enterprise environments.</sub><br><br>
   <sub>Copyright © 2025 XpertLambda. All Rights Reserved.</sub>
 </p>

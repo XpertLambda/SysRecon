@@ -19,7 +19,12 @@ public:
     
     // Configuration
     void SetLogLevel(LogLevel level);
+    LogLevel GetLogLevel() const;
     void SetLogFile(const String& filename);
+    // Stops file logging. Interactive mode calls this between scans so a
+    // later scan with a different output directory does not keep appending to
+    // the previous scan's log.
+    void CloseLogFile();
     void SetConsoleOutput(bool enable);
     void SetTimestampFormat(const String& format);
     
@@ -53,14 +58,17 @@ private:
     String GetTimestamp();
     String LogLevelToString(LogLevel level);
     
-    LogLevel min_log_level_ = LogLevel::Info;
+    // Atomic: Log() checks IsEnabled() before taking log_mutex_, so a plain
+    // member here raced with SetLogLevel writing under the lock.
+    std::atomic<LogLevel> min_log_level_{LogLevel::Info};
     String log_filename_;
     String timestamp_format_ = L"%Y-%m-%d %H:%M:%S";
-    bool console_output_ = true;
-    bool file_output_ = false;
+    std::atomic<bool> console_output_{true};
+    std::atomic<bool> file_output_{false};
     
     std::ofstream log_file_;
-    std::mutex log_mutex_;
+    // mutable: the const accessors must lock to read guarded state.
+    mutable std::mutex log_mutex_;
     
     // Statistics
     std::map<LogLevel, size_t> log_counts_;
