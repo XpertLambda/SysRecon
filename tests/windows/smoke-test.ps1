@@ -17,7 +17,7 @@
     Used by the `windows-test` CI job. Also runnable by hand in a disposable
     Windows VM (it installs and then uninstalls SysRecon):
 
-        pwsh -File tests\windows\smoke-test.ps1 -Installer .\SysRecon-Setup-1.1.0.exe
+        pwsh -File tests\windows\smoke-test.ps1 -Installer .\SysRecon-Setup-1.2.0.exe
 
 .PARAMETER Installer
     Path to SysRecon-Setup-<version>.exe.

@@ -4,6 +4,8 @@ All notable changes to SysRecon are documented here.
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-11-01
+
 ### Fixed
 
 - **Every run with command-line arguments crashed on real Windows** (access
@@ -103,6 +105,24 @@ All notable changes to SysRecon are documented here.
   wine does not implement.
 - Installer `/ADDTOPATH` switch, so an unattended `/S` install can select the
   default-off "Add to PATH" component.
+- **Reports and the log file are access-restricted**: each gets a protected
+  ACL granting access only to SYSTEM, Administrators and the file's owner. They
+  previously inherited the folder's ACL, which under Program Files lets every
+  local user read usernames, SIDs and admin membership.
+- **Start Menu and desktop scan shortcuts request elevation** ("Run as
+  administrator"). Their descriptions always said so, but nothing elevated, so
+  a scan started from the Start Menu aborted on `require_admin`.
+- When SysRecon owns its console window (started from a shortcut), it waits
+  for a key before exiting so Quick Scan and Help output can be read.
+- **Hardening loop test** (`hardening-test` CI job,
+  `tests/windows/hardening-test.ps1`): audit, preview (must change nothing),
+  `-Apply` (no control may fail), re-audit (account-policy and firewall
+  findings must be gone), second `-Apply` (must change nothing), `-Rollback`
+  (findings must return). The first real run of the hardening script.
+- CI also builds and unit-tests with **MSVC**, runs the Windows end-to-end test
+  on **Windows 11** (`windows-11-arm`, x64 emulation) as well as Windows
+  Server 2022, and checks that release binaries keep DEP and ASLR enabled.
+- `--version` reports the actual compiler instead of always "MinGW-w64".
 
 - **Windows hardening companion.** `hardening/Invoke-SysReconHardening.ps1`
   applies a CIS Level 1 (workstation)-aligned baseline, closing the loop with
@@ -126,9 +146,19 @@ All notable changes to SysRecon are documented here.
   now distinguishes the read-only `sysrecon.exe` from the opt-in hardening
   script; Roadmap "Remediation Actions" / "Compliance Profiles" marked partially
   delivered (CIS L1 shipped).
+- README corrected where it described behaviour the code does not have: Browser
+  Helper Object and BitLocker checks (none exist), "Control Flow Guard:
+  Enabled" (MinGW-w64 GCC does not emit CFG; DEP and ASLR are enabled), an
+  invented JSON/CSV schema (now the real one), untested OS compatibility and
+  scan-time figures, Windows APIs that are never called, and an MSI installer
+  that does not exist.
 
 ### Known limitations
 
+- The registry policy check for "Windows Defender disabled by policy"
+  (`DisableAntiSpyware`) reads the wrong key and cannot fire; UAC is the only
+  policy it reports.
+- Release builds do not enable Control Flow Guard (toolchain limitation).
 - **The memory module's malware scan still cannot report anything**:
   `ScanForMalware` iterates a per-process inventory that only
   `AnalyzeProcessMemory` fills, and nothing calls it. The RWX-region check and
