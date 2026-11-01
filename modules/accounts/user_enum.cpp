@@ -180,28 +180,24 @@ bool UserEnumerator::EnumerateLocalUsers() {
                     if (domainName) LocalFree(domainName);
                 }
                 
-                // Convert timestamps
+                // Convert timestamps. USER_INFO_3 reports these as the number of
+                // seconds since the Unix epoch (00:00:00 1970-01-01 GMT), NOT as a
+                // Win32 FILETIME, so convert with from_time_t. A last_logon of 0
+                // means the account has never logged on.
                 if (pUserInfo->usri3_last_logon != 0) {
-                    FILETIME ft = {0, 0};
-                    ULARGE_INTEGER ull;
-                    ull.QuadPart = pUserInfo->usri3_last_logon;
-                    ft.dwLowDateTime = ull.LowPart;
-                    ft.dwHighDateTime = ull.HighPart;
-                    user.last_logon = FileTimeToSystemTime(ft);
+                    user.last_logon = std::chrono::system_clock::from_time_t(
+                        static_cast<time_t>(pUserInfo->usri3_last_logon));
                 }
-                
+
                 if (pUserInfo->usri3_password_age != 0) {
                     auto now = std::chrono::system_clock::now();
                     user.password_last_set = now - std::chrono::seconds(pUserInfo->usri3_password_age);
                 }
-                
-                if (pUserInfo->usri3_acct_expires != TIMEQ_FOREVER) {
-                    FILETIME ft = {0, 0};
-                    ULARGE_INTEGER ull;
-                    ull.QuadPart = pUserInfo->usri3_acct_expires;
-                    ft.dwLowDateTime = ull.LowPart;
-                    ft.dwHighDateTime = ull.HighPart;
-                    user.account_expires = FileTimeToSystemTime(ft);
+
+                if (pUserInfo->usri3_acct_expires != TIMEQ_FOREVER &&
+                    pUserInfo->usri3_acct_expires != 0) {
+                    user.account_expires = std::chrono::system_clock::from_time_t(
+                        static_cast<time_t>(pUserInfo->usri3_acct_expires));
                 }
                 
                 users_.push_back(user);
@@ -320,6 +316,19 @@ bool UserEnumerator::EnumerateDomainGroups() {
     return false;
 }
 
+namespace {
+// Accounts idle for longer than this are treated as stale/unused.
+constexpr int kStaleAccountDays = 90;
+
+// Whole days since the given time point, or -1 when it is the default-
+// constructed (epoch) value used to mean "never".
+long long DaysSince(const std::chrono::system_clock::time_point& tp) {
+    if (tp.time_since_epoch().count() == 0) return -1;
+    auto delta = std::chrono::system_clock::now() - tp;
+    return std::chrono::duration_cast<std::chrono::hours>(delta).count() / 24;
+}
+} // namespace
+
 void UserEnumerator::AnalyzeUserAccount(const UserAccount& user) {
     SecurityLevel risk_level = AssessUserRisk(user);
     
@@ -335,7 +344,32 @@ void UserEnumerator::AnalyzeUserAccount(const UserAccount& user) {
     result.details[L"Enabled"] = user.is_enabled ? L"Yes" : L"No";
     result.details[L"Admin"] = user.is_admin ? L"Yes" : L"No";
     result.details[L"Password Never Expires"] = user.password_never_expires ? L"Yes" : L"No";
-    
+
+    long long days = DaysSince(user.last_logon);
+    if (days < 0) {
+        result.details[L"Last Logon"] = L"Never";
+    } else {
+        result.details[L"Last Logon"] = Core::Utils::FormatTimestamp(user.last_logon);
+        result.details[L"Days Since Logon"] = std::to_wstring(days);
+    }
+
+    // Attach remediation/reference for the notable conditions.
+    bool stale = user.is_enabled && (days < 0 || days > kStaleAccountDays);
+    if (user.is_admin && user.is_enabled) {
+        result.remediation = L"Confirm this account requires administrative rights. "
+            L"Remove from privileged groups if not, enforce MFA, and prefer "
+            L"just-in-time elevation over standing admin membership.";
+        result.reference = L"MITRE ATT&CK T1078.003 (Valid Accounts: Local Accounts)";
+    } else if (stale) {
+        result.remediation = L"Disable or remove this unused account; dormant accounts "
+            L"widen the attack surface and are prime targets for credential abuse.";
+        result.reference = L"MITRE ATT&CK T1078 (Valid Accounts)";
+    } else if (user.password_never_expires && user.is_enabled) {
+        result.remediation = L"Remove the 'password never expires' flag and enforce a "
+            L"password-rotation policy for this enabled account.";
+        result.reference = L"CIS Controls 5 (Account Management)";
+    }
+
     scan_results_.push_back(result);
 }
 
@@ -349,11 +383,18 @@ SecurityLevel UserEnumerator::AssessUserRisk(const UserAccount& user) {
     if (user.password_never_expires && user.is_enabled) {
         risk = std::max(risk, SecurityLevel::Medium);
     }
-    
+
+    // An enabled account that has never logged on or has been idle for a long
+    // time is a latent risk (stale/orphaned credential).
+    long long days = DaysSince(user.last_logon);
+    if (user.is_enabled && (days < 0 || days > kStaleAccountDays)) {
+        risk = std::max(risk, SecurityLevel::Medium);
+    }
+
     if (user.username == L"Administrator" && user.is_enabled) {
         risk = SecurityLevel::Critical;
     }
-    
+
     return risk;
 }
 
@@ -364,6 +405,13 @@ StringVector UserEnumerator::FindWeakPasswords() {
 
 StringVector UserEnumerator::FindUnusedAccounts() {
     StringVector unused_users;
+    for (const auto& user : users_) {
+        if (!user.is_enabled) continue;
+        long long days = DaysSince(user.last_logon);
+        if (days < 0 || days > kStaleAccountDays) {
+            unused_users.push_back(user.username);
+        }
+    }
     return unused_users;
 }
 

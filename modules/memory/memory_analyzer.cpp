@@ -478,7 +478,8 @@ bool MemoryAnalyzer::DetectShellcode(const ByteVector& memory_data) {
     };
     
     for (const auto& pattern : shellcode_patterns) {
-        for (size_t i = 0; i < memory_data.size() - pattern.size(); i++) {
+        if (pattern.empty() || pattern.size() > memory_data.size()) continue;
+        for (size_t i = 0; i + pattern.size() <= memory_data.size(); i++) {
             bool match = true;
             for (size_t j = 0; j < pattern.size(); j++) {
                 if (memory_data[i + j] != pattern[j]) {

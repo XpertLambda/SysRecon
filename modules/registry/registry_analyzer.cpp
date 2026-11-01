@@ -34,105 +34,79 @@ bool RegistryAnalyzer::AnalyzeStartupKeys() {
         L"SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\RunOnce"
     };
     
-    // Check HKLM keys
-    for (const auto& key_path : startup_keys) {
-        HKEY hKey;
-        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, key_path.c_str(), 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+    // Scan one hive's Run/RunOnce keys. Shared by HKLM and HKCU so both hives
+    // are analysed and reported identically.
+    auto scanHive = [&](HKEY root, const String& hive_label) {
+        for (const auto& key_path : startup_keys) {
+            HKEY hKey;
+            if (RegOpenKeyExW(root, key_path.c_str(), 0, KEY_READ, &hKey) != ERROR_SUCCESS) {
+                continue;
+            }
+
             DWORD index = 0;
             wchar_t valueName[16384];
-            DWORD valueNameSize;
             wchar_t valueData[16384];
-            DWORD valueDataSize;
-            DWORD valueType;
-            
+
             while (true) {
-                valueNameSize = sizeof(valueName) / sizeof(valueName[0]);
-                valueDataSize = sizeof(valueData);
-                
-                LONG result = RegEnumValueW(hKey, index, valueName, &valueNameSize, 
+                DWORD valueNameSize = sizeof(valueName) / sizeof(valueName[0]);
+                DWORD valueDataSize = sizeof(valueData);
+                DWORD valueType = 0;
+
+                LONG result = RegEnumValueW(hKey, index, valueName, &valueNameSize,
                                            nullptr, &valueType, (LPBYTE)valueData, &valueDataSize);
-                
-                if (result == ERROR_SUCCESS) {
-                    StartupEntry entry;
-                    entry.name = String(valueName);
-                    entry.command = String(valueData, valueDataSize / sizeof(wchar_t) - 1);
-                    entry.location = L"HKLM\\" + key_path;
-                    entry.is_enabled = true;
-                    entry.is_signed = false;
-                    
-                    // Check if this is a known legitimate startup entry
-                    bool is_known = Core::SystemWhitelist::Instance().IsKnownPersistenceKey(entry.name);
-                    bool is_system_path = Core::SystemWhitelist::Instance().IsSystemPath(entry.command);
-                    
-                    // Assign risk level based on analysis
-                    if (is_known || is_system_path) {
-                        entry.risk_level = SecurityLevel::Low;
-                    } else {
-                        entry.risk_level = SecurityLevel::Medium;
-                    }
-                    
-                    startup_entries_.push_back(entry);
-                    
-                    // Only create scan result for non-system entries or medium+ risk
-                    if (!is_known && !is_system_path) {
-                        ScanResult scan_result;
-                        scan_result.module_name = L"Registry";
-                        scan_result.item_name = entry.name;
-                        scan_result.description = L"Startup entry in: " + entry.location;
-                        scan_result.details[L"Command"] = entry.command;
-                        scan_result.details[L"Location"] = entry.location;
-                        scan_result.details[L"Note"] = is_known ? L"Known system component" : L"Third-party startup entry";
-                        scan_result.risk_level = entry.risk_level;
-                        scan_result.timestamp = std::chrono::system_clock::now();
-                        scan_results_.push_back(scan_result);
-                    }
-                    
-                    index++;
-                } else {
+                if (result != ERROR_SUCCESS) {
                     break;
+                }
+                index++;
+
+                // Only string-typed values hold a launch command.
+                if (valueType != REG_SZ && valueType != REG_EXPAND_SZ) {
+                    continue;
+                }
+
+                StartupEntry entry;
+                entry.name = String(valueName, valueNameSize);
+                // Compute the character count safely: RegEnumValueW reports the
+                // byte length including the trailing NUL for string types, but a
+                // zero-length or unterminated value must not underflow.
+                size_t chars = valueDataSize / sizeof(wchar_t);
+                if (chars > 0 && valueData[chars - 1] == L'\0') chars--;
+                entry.command = String(valueData, chars);
+                entry.location = hive_label + L"\\" + key_path;
+                entry.is_enabled = true;
+                entry.is_signed = false;
+
+                bool is_known = Core::SystemWhitelist::Instance().IsKnownPersistenceKey(entry.name);
+                bool is_system_path = Core::SystemWhitelist::Instance().IsSystemPath(entry.command);
+                entry.risk_level = (is_known || is_system_path) ? SecurityLevel::Low
+                                                                : SecurityLevel::Medium;
+                startup_entries_.push_back(entry);
+
+                // Report third-party (non-whitelisted) autostart entries.
+                if (!is_known && !is_system_path) {
+                    ScanResult scan_result;
+                    scan_result.module_name = L"Registry";
+                    scan_result.item_name = entry.name;
+                    scan_result.description = L"Autostart entry in: " + entry.location;
+                    scan_result.risk_level = entry.risk_level;
+                    scan_result.details[L"Command"] = entry.command;
+                    scan_result.details[L"Location"] = entry.location;
+                    scan_result.details[L"Note"] = L"Third-party startup entry";
+                    scan_result.remediation = L"Verify the program is expected and the "
+                        L"target binary is signed and not user-writable. Remove the "
+                        L"value if it is unrecognised persistence.";
+                    scan_result.reference = L"MITRE ATT&CK T1547.001 (Registry Run Keys / Startup Folder)";
+                    scan_result.timestamp = std::chrono::system_clock::now();
+                    scan_results_.push_back(scan_result);
                 }
             }
             RegCloseKey(hKey);
         }
-    }
-    
-    // Check HKCU keys
-    for (const auto& key_path : startup_keys) {
-        HKEY hKey;
-        if (RegOpenKeyExW(HKEY_CURRENT_USER, key_path.c_str(), 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
-            DWORD index = 0;
-            wchar_t valueName[16384];
-            DWORD valueNameSize;
-            wchar_t valueData[16384];
-            DWORD valueDataSize;
-            DWORD valueType;
-            
-            while (true) {
-                valueNameSize = sizeof(valueName) / sizeof(valueName[0]);
-                valueDataSize = sizeof(valueData);
-                
-                LONG result = RegEnumValueW(hKey, index, valueName, &valueNameSize, 
-                                           nullptr, &valueType, (LPBYTE)valueData, &valueDataSize);
-                
-                if (result == ERROR_SUCCESS) {
-                    StartupEntry entry;
-                    entry.name = String(valueName);
-                    entry.command = String(valueData, valueDataSize / sizeof(wchar_t) - 1);
-                    entry.location = L"HKCU\\" + key_path;
-                    entry.is_enabled = true;
-                    entry.is_signed = false;
-                    entry.risk_level = SecurityLevel::Medium;
-                    
-                    startup_entries_.push_back(entry);
-                    index++;
-                } else {
-                    break;
-                }
-            }
-            RegCloseKey(hKey);
-        }
-    }
-    
+    };
+
+    scanHive(HKEY_LOCAL_MACHINE, L"HKLM");
+    scanHive(HKEY_CURRENT_USER, L"HKCU");
+
     SYSRECON_LOG_INFO(L"Found " + std::to_wstring(startup_entries_.size()) + L" startup entries");
     return true;
 #else

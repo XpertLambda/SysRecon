@@ -221,9 +221,14 @@ String GetLastErrorString(DWORD error_code) {
         nullptr, error_code, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
         (LPWSTR)&message_buffer, 0, nullptr);
     
+    if (message_buffer == nullptr || size == 0) {
+        if (message_buffer) LocalFree(message_buffer);
+        return L"Error " + std::to_wstring(error_code);
+    }
+
     String message(message_buffer, size);
     LocalFree(message_buffer);
-    
+
     return Trim(message);
 }
 
@@ -872,6 +877,26 @@ bool IsWritableByNonAdmin(const String& path, StringVector* principals) {
                             FILE_WRITE_ATTRIBUTES | FILE_WRITE_EA |
                             WRITE_DAC | WRITE_OWNER | DELETE | GENERIC_WRITE | GENERIC_ALL;
 
+    constexpr size_t kWatch = sizeof(watch) / sizeof(watch[0]);
+    bool denied[kWatch] = { false };
+
+    // First pass: record principals explicitly DENIED a dangerous right, so an
+    // ALLOW elsewhere in the DACL does not produce a false positive.
+    for (DWORD i = 0; i < dacl->AceCount; ++i) {
+        LPVOID ace = nullptr;
+        if (!GetAce(dacl, i, &ace)) continue;
+        ACE_HEADER* hdr = reinterpret_cast<ACE_HEADER*>(ace);
+        if (hdr->AceType != ACCESS_DENIED_ACE_TYPE) continue;
+        ACCESS_DENIED_ACE* deny = reinterpret_cast<ACCESS_DENIED_ACE*>(ace);
+        if ((deny->Mask & dangerous) == 0) continue;
+        PSID aceSid = reinterpret_cast<PSID>(&deny->SidStart);
+        for (size_t w = 0; w < kWatch; ++w) {
+            if (watch[w].sid && EqualSid(aceSid, watch[w].sid)) denied[w] = true;
+        }
+    }
+
+    // Second pass: an ALLOW of a dangerous right to a non-denied watched
+    // principal means the object is writable by a low-privilege account.
     bool writable = false;
     for (DWORD i = 0; i < dacl->AceCount; ++i) {
         LPVOID ace = nullptr;
@@ -883,10 +908,11 @@ bool IsWritableByNonAdmin(const String& path, StringVector* principals) {
         PSID aceSid = reinterpret_cast<PSID>(&allow->SidStart);
         if ((allow->Mask & dangerous) == 0) continue;
 
-        for (const auto& w : watch) {
-            if (w.sid && EqualSid(aceSid, w.sid)) {
+        for (size_t w = 0; w < kWatch; ++w) {
+            if (denied[w]) continue;
+            if (watch[w].sid && EqualSid(aceSid, watch[w].sid)) {
                 writable = true;
-                if (principals) principals->push_back(w.label);
+                if (principals) principals->push_back(watch[w].label);
             }
         }
     }
