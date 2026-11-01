@@ -41,6 +41,21 @@ $Exe = Join-Path $InstallDir 'sysrecon.exe'
 $ReportsDir = Join-Path $InstallDir 'reports'
 
 $script:Failures = [System.Collections.Generic.List[string]]::new()
+$script:LastName = $null
+
+# On GitHub Actions, failures are also emitted as workflow annotations: they
+# show on the run page and are readable through the public API, whereas the
+# raw job log needs an authenticated download.
+function Write-Annotation([ValidateSet('error', 'warning')][string]$Level, [string]$Message) {
+    if (-not $env:GITHUB_ACTIONS) { return }
+    $escaped = $Message.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+    Write-Host "::$Level title=SysRecon Windows smoke test::$escaped"
+}
+
+trap {
+    Write-Annotation error "Aborted: $($_.Exception.Message)"
+    break
+}
 
 function Write-Step([string]$Title) {
     Write-Host ''
@@ -53,6 +68,9 @@ function Assert-True([bool]$Condition, [string]$What) {
     } else {
         Write-Host "  [FAIL] $What" -ForegroundColor Red
         $script:Failures.Add($What)
+        $context = if ($script:LastName) { Get-Tail $script:LastName } else { '' }
+        if ($context) { Write-Host ($context -replace '(?m)^', '         | ') }
+        Write-Annotation error ($(if ($context) { "$What`n--- last output of '$($script:LastName)' ---`n$context" } else { $What }))
     }
 }
 
@@ -85,7 +103,18 @@ function Invoke-Timed {
         throw "$Name did not finish within $TimeoutSec s (hung)"
     }
     $p.WaitForExit()
+    $script:LastName = $Name
     return $p.ExitCode
+}
+
+# Last lines of a step's stdout+stderr, for failure messages.
+function Get-Tail([string]$Name, [int]$Lines = 8) {
+    $text = @()
+    foreach ($ext in 'out', 'err') {
+        $f = Join-Path $OutDir "$Name.$ext.txt"
+        if (Test-Path -LiteralPath $f) { $text += Get-Content -LiteralPath $f -Tail $Lines }
+    }
+    return ($text | Where-Object { $_ -and $_.Trim() }) -join "`n"
 }
 
 function Get-Output([string]$Name) {
@@ -143,7 +172,10 @@ function Assert-ScanComplete($Report, [string]$Name) {
     Assert-True ($Report.scan_info.elevated -eq $true) "$Name ran elevated"
     $incomplete = @($Report.incomplete_checks)
     Assert-True ($incomplete.Count -eq 0) "$Name has no incomplete checks"
-    foreach ($note in $incomplete) { Write-Host "         incomplete: $note" -ForegroundColor Yellow }
+    foreach ($note in $incomplete) {
+        Write-Host "         incomplete: $note" -ForegroundColor Yellow
+        Write-Annotation warning "$Name incomplete check: $note"
+    }
     Assert-True ($Report.summary.total -eq @($Report.results).Count) "$Name summary total matches results"
 }
 
