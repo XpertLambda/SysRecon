@@ -96,6 +96,10 @@ bool RegistryAnalyzer::Initialize() {
 
 bool RegistryAnalyzer::AnalyzeStartupKeys() {
     if (!initialized_) return false;
+    if (!scan_startup_keys_) {
+        SYSRECON_LOG_DEBUG(L"AnalyzeStartupKeys skipped: disabled by config (modules.registry.scan_startup_keys)");
+        return true;
+    }
     
     SYSRECON_LOG_INFO(L"Analyzing registry startup keys...");
     
@@ -204,6 +208,10 @@ bool RegistryAnalyzer::AnalyzeStartupKeys() {
 
 bool RegistryAnalyzer::AnalyzePolicies() {
     if (!initialized_) return false;
+    if (!analyze_policies_) {
+        SYSRECON_LOG_DEBUG(L"AnalyzePolicies skipped: disabled by config (modules.registry.analyze_policies)");
+        return true;
+    }
     
     SYSRECON_LOG_INFO(L"Analyzing security policies...");
     
@@ -240,7 +248,10 @@ bool RegistryAnalyzer::AnalyzePolicies() {
                     DWORD dword_val = *(DWORD*)value_data;
                     value_str = std::to_wstring(dword_val);
                 } else if (value_type == REG_SZ || value_type == REG_EXPAND_SZ) {
-                    value_str = (WCHAR*)value_data;
+                    // Registry data need not be NUL-terminated; never read past
+                    // the size RegEnumValueW reported.
+                    value_str = Core::Text::RegistryBufferToString(
+                        reinterpret_cast<const wchar_t*>(value_data), value_data_size);
                 }
                 
                 policy.current_value = value_str;
@@ -299,6 +310,10 @@ bool RegistryAnalyzer::AnalyzePolicies() {
 
 bool RegistryAnalyzer::AnalyzePermissions() {
     if (!initialized_) return false;
+    if (!check_permissions_) {
+        SYSRECON_LOG_DEBUG(L"AnalyzePermissions skipped: disabled by config (modules.registry.check_permissions)");
+        return true;
+    }
     
     SYSRECON_LOG_INFO(L"Analyzing registry permissions...");
     

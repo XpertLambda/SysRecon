@@ -90,6 +90,10 @@ public:
 private:
     // Helper methods
     String ConnectionStateToString(DWORD state);
+    // Loads the TCP and UDP tables (and owning process names) once per scan.
+    bool LoadTables();
+    void ReportListeningPorts();
+    void ReportConnections();
 
     // Configuration
     bool scan_listening_ports_;
@@ -105,6 +109,8 @@ private:
 
     // State
     bool initialized_;
+    bool tables_loaded_ = false;
+    std::map<DWORD, String> process_names_;
     StringVector error_messages_;
 };
 

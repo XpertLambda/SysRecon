@@ -1,13 +1,23 @@
 #pragma once
 
 #include "../sysrecon.h"
+#include <ctime>
 
 namespace SysRecon {
 namespace Core {
 namespace Utils {
 
+// ---------------------------------------------------------------------------
+// Portable helpers (src/core/utils_common.cpp, part of sysrecon_core and
+// unit-tested natively).
+// ---------------------------------------------------------------------------
+
+// UTF-8 <-> wide conversion. Implemented without Win32 so the same code is
+// tested on Linux and shipped on Windows. Invalid input (bad UTF-8, unpaired
+// surrogates) becomes U+FFFD rather than being silently dropped or truncated.
 String Utf8ToWide(const std::string& utf8_str);
 std::string WideToUtf8(const String& wide_str);
+
 String ToLower(const String& str);
 String ToUpper(const String& str);
 String Trim(const String& str);
@@ -29,39 +39,15 @@ bool CopyFile(const String& source, const String& destination);
 bool DeleteFile(const String& path);
 StringVector ListFiles(const String& directory, const String& pattern = L"*");
 
-#ifdef _WIN32
-bool IsRunningAsAdmin();
-bool EnableDebugPrivilege();
-bool EnableBackupPrivilege();
-String GetLastErrorString();
-String GetLastErrorString(DWORD error_code);
-DWORD GetProcessIdByName(const String& process_name);
-String GetProcessName(DWORD process_id);
-String GetSystemDirectory();
-String GetWindowsDirectory();
-String GetTempDirectory();
-String GetCurrentUserName();
-String GetComputerName();
-String GetWindowsVersion();
-bool IsWow64Process();
-#endif
-
 String IpAddressToString(uint32_t ip);
+// Returns 0 for anything that is not a valid dotted quad.
 uint32_t StringToIpAddress(const String& ip_str);
 bool IsValidIpAddress(const String& ip_str);
 bool IsPrivateIpAddress(const String& ip_str);
 String MacAddressToString(const uint8_t* mac);
 
-#ifdef _WIN32
-String RegistryKeyToString(HKEY key);
-bool RegistryKeyExists(HKEY root, const String& subkey);
-String ReadRegistryString(HKEY root, const String& subkey, const String& value_name);
-DWORD ReadRegistryDword(HKEY root, const String& subkey, const String& value_name);
-ByteVector ReadRegistryBinary(HKEY root, const String& subkey, const String& value_name);
-StringVector EnumerateRegistrySubkeys(HKEY root, const String& subkey);
-StringVector EnumerateRegistryValues(HKEY root, const String& subkey);
-#endif
-
+// Thread-safe localtime (localtime_s on Windows, localtime_r elsewhere).
+bool ToLocalTime(std::time_t t, std::tm& out);
 String FormatTimestamp(const std::chrono::system_clock::time_point& time, const String& format = L"%Y-%m-%d %H:%M:%S");
 String GetCurrentTimestamp();
 
@@ -74,14 +60,54 @@ public:
     double GetElapsedSeconds() const;
     double GetElapsedMilliseconds() const;
     String GetElapsedString() const;
-    
+
 private:
-    std::chrono::high_resolution_clock::time_point start_time_;
-    std::chrono::high_resolution_clock::time_point end_time_;
+    std::chrono::steady_clock::time_point start_time_;
+    std::chrono::steady_clock::time_point end_time_;
     bool is_running_;
 };
 
 String FormatBytes(size_t bytes);
+
+// ---------------------------------------------------------------------------
+// Win32 helpers (src/core/utils.cpp, Windows executable only).
+// ---------------------------------------------------------------------------
+#ifdef _WIN32
+bool IsRunningAsAdmin();
+bool EnableDebugPrivilege();
+bool EnableBackupPrivilege();
+String GetLastErrorString();
+String GetLastErrorString(DWORD error_code);
+DWORD GetProcessIdByName(const String& process_name);
+String GetProcessName(DWORD process_id);
+// PID -> executable name for every process, from a single snapshot. Use this
+// instead of calling GetProcessName in a loop (one snapshot per call).
+std::map<DWORD, String> GetProcessNameMap();
+String GetSystemDirectory();
+String GetWindowsDirectory();
+String GetTempDirectory();
+// Directory containing sysrecon.exe, without a trailing separator.
+String GetExecutableDirectory();
+// Expands %SystemRoot%-style variables and the \SystemRoot\ and \??\ prefixes
+// that appear in service ImagePath values, so the result can be opened.
+String ExpandImagePath(const String& path);
+String GetCurrentUserName();
+String GetComputerName();
+String GetWindowsVersion();
+bool IsWow64Process();
+
+String RegistryKeyToString(HKEY key);
+bool RegistryKeyExists(HKEY root, const String& subkey);
+String ReadRegistryString(HKEY root, const String& subkey, const String& value_name);
+DWORD ReadRegistryDword(HKEY root, const String& subkey, const String& value_name);
+// Distinguishes "value is 0" from "value is absent", which matters for policy
+// checks where an unset value has its own (documented) default.
+std::optional<DWORD> TryReadRegistryDword(HKEY root, const String& subkey, const String& value_name);
+std::optional<String> TryReadRegistryString(HKEY root, const String& subkey, const String& value_name);
+ByteVector ReadRegistryBinary(HKEY root, const String& subkey, const String& value_name);
+StringVector EnumerateRegistrySubkeys(HKEY root, const String& subkey);
+StringVector EnumerateRegistryValues(HKEY root, const String& subkey);
+#endif
 
 }
 }

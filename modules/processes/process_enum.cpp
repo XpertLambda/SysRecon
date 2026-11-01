@@ -140,6 +140,11 @@ void ProcessEnumerator::AnalyzeProcess(ProcessInfo& proc) {
 
 bool ProcessEnumerator::CheckLoadedModules() {
     if (!initialized_) return false;
+    if (!check_dlls_) {
+        // Off via config (modules.processes.check_dlls) or stealth mode.
+        SYSRECON_LOG_DEBUG(L"Loaded-module inspection skipped");
+        return true;
+    }
     
     SYSRECON_LOG_INFO(L"Checking loaded modules...");
     

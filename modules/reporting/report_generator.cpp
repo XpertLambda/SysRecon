@@ -74,6 +74,18 @@ bool ReportGenerator::GenerateJSON(const String& filename) {
         j["system_info"]["computer_name"] = Core::Utils::WideToUtf8(system_info_.computer_name);
         j["system_info"]["os_version"] = Core::Utils::WideToUtf8(system_info_.os_version);
         j["system_info"]["architecture"] = Core::Utils::WideToUtf8(system_info_.architecture);
+
+        j["scan_info"]["elevated"] = system_info_.elevated;
+        j["scan_info"]["stealth_mode"] = system_info_.stealth;
+        j["scan_info"]["config"] = Core::Utils::WideToUtf8(system_info_.config_path);
+        j["scan_info"]["modules"] = nlohmann::json::array();
+        for (const auto& m : system_info_.modules) {
+            j["scan_info"]["modules"].push_back(Core::Utils::WideToUtf8(m));
+        }
+        j["incomplete_checks"] = nlohmann::json::array();
+        for (const auto& note : incomplete_checks_) {
+            j["incomplete_checks"].push_back(Core::Utils::WideToUtf8(note));
+        }
         
         // Scan results
         j["results"] = nlohmann::json::array();
@@ -178,6 +190,12 @@ bool ReportGenerator::GenerateCSV(const String& filename) {
         }
         file << csv(details_str) << "\n";
     }
+
+    // Incomplete checks as rows of their own, so a spreadsheet user sees them.
+    for (const auto& note : incomplete_checks_) {
+        file << csv(L"SysRecon") << "," << csv(L"Incomplete check") << ","
+             << csv(L"Info") << "," << csv(note) << "," << csv(L"") << "\n";
+    }
     
     file.close();
     SYSRECON_LOG_INFO(L"CSV report generated successfully");
@@ -210,19 +228,36 @@ bool ReportGenerator::GenerateHTML(const String& filename) {
     html << L"table { width: 100%; border-collapse: collapse; margin: 20px 0; background: white; }\n";
     html << L"th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }\n";
     html << L"th { background-color: #007bff; color: white; }\n";
-    html << L".details { margin-top: 10px; padding: 10px; background: #f8f9fa; border-radius: 3px; }\n";
+    html << L".details { margin-top: 10px; padding: 10px; background: #f8f9fa; border-radius: 3px; word-break: break-all; }\n";
+    html << L".info-box.warning { border-left: 4px solid #fd7e14; }\n";
     html << L"</style>\n";
     html << L"</head>\n<body>\n";
     
     // Header
     html << L"<h1>🔒 SysRecon Security Assessment Report</h1>\n";
     html << L"<div class=\"info-box\">\n";
-    html << L"<p><strong>Generated:</strong> " << Core::Utils::GetCurrentTimestamp() << L"</p>\n";
-    html << L"<p><strong>System:</strong> " << Core::Utils::GetComputerName() << L"</p>\n";
-    html << L"<p><strong>OS Version:</strong> " << Core::Utils::GetWindowsVersion() << L"</p>\n";
-    html << L"<p><strong>User:</strong> " << Core::Utils::GetCurrentUserName() << L"</p>\n";
+    // Header values come from the host too (computer and user names are
+    // configurable), so they are escaped like everything else.
+    html << L"<p><strong>Generated:</strong> " << H(Core::Utils::GetCurrentTimestamp()) << L"</p>\n";
+    html << L"<p><strong>System:</strong> " << H(Core::Utils::GetComputerName()) << L"</p>\n";
+    html << L"<p><strong>OS Version:</strong> " << H(Core::Utils::GetWindowsVersion()) << L"</p>\n";
+    html << L"<p><strong>User:</strong> " << H(Core::Utils::GetCurrentUserName()) << L"</p>\n";
+    html << L"<p><strong>Elevated:</strong> " << (system_info_.elevated ? L"Yes" : L"No") << L"</p>\n";
+    html << L"<p><strong>Modules:</strong> " << H(Core::Utils::Join(system_info_.modules, L", "))
+         << (system_info_.stealth ? L" (stealth mode)" : L"") << L"</p>\n";
+    html << L"<p><strong>Configuration:</strong> " << H(system_info_.config_path) << L"</p>\n";
     html << L"<p><strong>Total Findings:</strong> " << scan_results_.size() << L"</p>\n";
     html << L"</div>\n";
+
+    if (!incomplete_checks_.empty()) {
+        html << L"<h2>Incomplete Checks</h2>\n";
+        html << L"<div class=\"info-box warning\">\n<p>These checks did not complete; "
+                L"the absence of findings in these areas is not evidence of safety.</p>\n<ul>\n";
+        for (const auto& note : incomplete_checks_) {
+            html << L"<li>" << H(note) << L"</li>\n";
+        }
+        html << L"</ul>\n</div>\n";
+    }
     
     // Count findings by severity
     int critical = 0, high = 0, medium = 0, low = 0;

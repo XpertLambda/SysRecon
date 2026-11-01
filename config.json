@@ -31,7 +31,6 @@
         "memory": {
             "enabled": false,
             "create_dumps": false,
-            "analyze_heap": false,
             "scan_for_malware": true,
             "max_dump_size_mb": 100
         }

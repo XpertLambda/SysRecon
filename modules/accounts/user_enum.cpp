@@ -36,7 +36,8 @@ bool UserEnumerator::EnumerateUsers() {
     SYSRECON_LOG_INFO_CTX(L"UserEnumerator", L"EnumerateUsers", L"Starting user enumeration");
     
     users_.clear();
-    
+    LoadAdministratorMembers();
+
     bool success = true;
     if (!EnumerateLocalUsers()) {
         success = false;
@@ -131,8 +132,9 @@ bool UserEnumerator::EnumerateLocalUsers() {
                 user.password_never_expires = (pUserInfo->usri3_flags & UF_DONT_EXPIRE_PASSWD) != 0;
                 user.password_required = !(pUserInfo->usri3_flags & UF_PASSWD_NOTREQD);
                 
-                // Check if user is admin
-                user.is_admin = IsUserInGroup(user.username, L"Administrators");
+                // Membership of BUILTIN\Administrators by SID, not by the
+                // English group name, which does not exist on localised Windows.
+                user.is_admin = IsAdministratorMember(user.username);
                 
                 // Get SID
                 PSID pSid = nullptr;
@@ -300,41 +302,191 @@ bool UserEnumerator::EnumerateDomainGroups() {
     return false;
 }
 
+namespace {
+// Well-known RIDs. The built-in accounts are identified by RID, not by name:
+// renaming "Administrator" is a common (and CIS-recommended) step, and the
+// name check let a renamed-but-enabled built-in admin go unreported.
+constexpr DWORD kBuiltinAdministratorRid = 500;
+constexpr DWORD kBuiltinGuestRid = 501;
+}
+
 void UserEnumerator::AnalyzeUserAccount(const UserAccount& user) {
     SecurityLevel risk_level = AssessUserRisk(user);
-    
+
     ScanResult result;
     result.module_name = L"User Accounts";
     result.item_name = user.username;
-    result.description = L"User account analysis: " + user.full_name;
+    result.description = user.full_name.empty() ? L"Local user account"
+                                                : L"Local user account: " + user.full_name;
     result.risk_level = risk_level;
     result.timestamp = std::chrono::system_clock::now();
-    
+
     result.details[L"Full Name"] = user.full_name;
     result.details[L"Description"] = user.description;
+    result.details[L"RID"] = std::to_wstring(user.user_id);
+    if (!user.sid.empty()) {
+        result.details[L"SID"] = user.sid;
+    }
     result.details[L"Enabled"] = user.is_enabled ? L"Yes" : L"No";
     result.details[L"Admin"] = user.is_admin ? L"Yes" : L"No";
     result.details[L"Password Never Expires"] = user.password_never_expires ? L"Yes" : L"No";
-    
+    result.details[L"Password Required"] = user.password_required ? L"Yes" : L"No";
+
+    StringVector issues;
+    if (user.is_enabled && user.user_id == kBuiltinAdministratorRid) {
+        issues.push_back(L"Built-in Administrator (RID 500) is enabled");
+    }
+    if (user.is_enabled && user.user_id == kBuiltinGuestRid) {
+        issues.push_back(L"Guest account (RID 501) is enabled");
+    }
+    if (user.is_enabled && !user.password_required) {
+        issues.push_back(L"Account may have an empty password (UF_PASSWD_NOTREQD)");
+    }
+    if (!issues.empty()) {
+        result.details[L"Issues"] = Core::Utils::Join(issues, L"; ");
+        result.details[L"Technique"] = L"T1078.001 Valid Accounts: Default Accounts";
+    }
+
     scan_results_.push_back(result);
 }
 
 SecurityLevel UserEnumerator::AssessUserRisk(const UserAccount& user) {
     SecurityLevel risk = SecurityLevel::Low;
-    
-    if (user.is_admin && user.is_enabled) {
+    if (!user.is_enabled) {
+        return risk;
+    }
+
+    if (user.is_admin) {
         risk = SecurityLevel::High;
     }
-    
-    if (user.password_never_expires && user.is_enabled) {
+    if (user.password_never_expires) {
         risk = std::max(risk, SecurityLevel::Medium);
     }
-    
-    if (user.username == L"Administrator" && user.is_enabled) {
+    if (!user.password_required) {
+        risk = std::max(risk, SecurityLevel::High);
+    }
+    if (user.user_id == kBuiltinGuestRid) {
+        risk = std::max(risk, SecurityLevel::High);
+    }
+    if (user.user_id == kBuiltinAdministratorRid) {
         risk = SecurityLevel::Critical;
     }
-    
     return risk;
+}
+
+void UserEnumerator::LoadAdministratorMembers() {
+    admin_members_.clear();
+    admin_members_loaded_ = false;
+#ifdef _WIN32
+    // Resolve the localised name of BUILTIN\Administrators from its SID.
+    BYTE sid_buffer[SECURITY_MAX_SID_SIZE];
+    DWORD sid_size = sizeof(sid_buffer);
+    if (!CreateWellKnownSid(WinBuiltinAdministratorsSid, nullptr, sid_buffer, &sid_size)) {
+        return;
+    }
+    wchar_t name[256];
+    wchar_t domain[256];
+    DWORD name_len = 256;
+    DWORD domain_len = 256;
+    SID_NAME_USE use;
+    if (!LookupAccountSidW(nullptr, sid_buffer, name, &name_len, domain, &domain_len, &use)) {
+        return;
+    }
+
+    StringVector members;
+    if (!GetGroupMembers(String(name, name_len), members)) {
+        return;
+    }
+    for (const auto& member : members) {
+        const String lower = Core::Utils::ToLower(member);
+        admin_members_.insert(lower);
+        const size_t slash = lower.find(L'\\');
+        if (slash != String::npos) {
+            admin_members_.insert(lower.substr(slash + 1));
+        }
+    }
+    admin_members_loaded_ = true;
+#endif
+}
+
+bool UserEnumerator::IsAdministratorMember(const String& username) const {
+    return admin_members_.count(Core::Utils::ToLower(username)) > 0;
+}
+
+bool UserEnumerator::AnalyzePasswordPolicy() {
+    if (!initialized_) {
+        return false;
+    }
+#ifdef _WIN32
+    SYSRECON_LOG_INFO_CTX(L"UserEnumerator", L"AnalyzePasswordPolicy", L"Analyzing local password policy");
+
+    USER_MODALS_INFO_0* policy = nullptr;
+    NET_API_STATUS status = NetUserModalsGet(nullptr, 0, reinterpret_cast<LPBYTE*>(&policy));
+    if (status != NERR_Success || policy == nullptr) {
+        SYSRECON_LOG_ERROR_CTX(L"UserEnumerator", L"AnalyzePasswordPolicy",
+                               L"NetUserModalsGet(0) failed: " + std::to_wstring(status));
+        return false;
+    }
+    const DWORD min_len = policy->usrmod0_min_passwd_len;
+    const DWORD max_age = policy->usrmod0_max_passwd_age;
+    const DWORD history = policy->usrmod0_password_hist_len;
+    NetApiBufferFree(policy);
+
+    USER_MODALS_INFO_3* lockout = nullptr;
+    status = NetUserModalsGet(nullptr, 3, reinterpret_cast<LPBYTE*>(&lockout));
+    if (status != NERR_Success || lockout == nullptr) {
+        SYSRECON_LOG_ERROR_CTX(L"UserEnumerator", L"AnalyzePasswordPolicy",
+                               L"NetUserModalsGet(3) failed: " + std::to_wstring(status));
+        return false;
+    }
+    const DWORD threshold = lockout->usrmod3_lockout_threshold;
+    const DWORD duration = lockout->usrmod3_lockout_duration;
+    NetApiBufferFree(lockout);
+
+    auto add = [this](const String& item, const String& description, SecurityLevel level,
+                      const String& current, const String& recommended, const String& technique) {
+        ScanResult r;
+        r.module_name = L"Account Policy";
+        r.item_name = item;
+        r.description = description;
+        r.risk_level = level;
+        r.details[L"Current"] = current;
+        r.details[L"Recommended (CIS L1)"] = recommended;
+        r.details[L"Technique"] = technique;
+        r.details[L"Remediation"] = L"Invoke-SysReconHardening.ps1 -Include AccountPolicy";
+        r.timestamp = std::chrono::system_clock::now();
+        scan_results_.push_back(r);
+    };
+
+    const String brute = L"T1110 Brute Force";
+    if (min_len < 14) {
+        add(L"Minimum password length", L"Minimum password length is below the CIS baseline",
+            min_len < 8 ? SecurityLevel::High : SecurityLevel::Medium,
+            std::to_wstring(min_len), L">= 14", brute);
+    }
+    if (threshold == 0) {
+        add(L"Account lockout", L"Account lockout is disabled: unlimited password guessing",
+            SecurityLevel::Medium, L"0 (never lock)", L"1-5 attempts", brute);
+    } else if (threshold > 5) {
+        add(L"Account lockout", L"Account lockout threshold is above the CIS baseline",
+            SecurityLevel::Low, std::to_wstring(threshold), L"1-5 attempts", brute);
+    }
+    if (threshold != 0 && duration != TIMEQ_FOREVER && duration < 15 * 60) {
+        add(L"Lockout duration", L"Lockout duration is shorter than the CIS baseline",
+            SecurityLevel::Low, std::to_wstring(duration / 60) + L" min", L">= 15 min", brute);
+    }
+    if (max_age == TIMEQ_FOREVER) {
+        add(L"Maximum password age", L"Passwords never expire by policy",
+            SecurityLevel::Low, L"Never", L"<= 365 days", L"T1078 Valid Accounts");
+    }
+    if (history < 24) {
+        add(L"Password history", L"Password history is shorter than the CIS baseline",
+            SecurityLevel::Low, std::to_wstring(history), L">= 24", L"T1078 Valid Accounts");
+    }
+    return true;
+#else
+    return true;
+#endif
 }
 
 StringVector UserEnumerator::FindWeakPasswords() {

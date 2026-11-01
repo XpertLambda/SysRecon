@@ -19,7 +19,12 @@ public:
     
     // Configuration
     void SetLogLevel(LogLevel level);
+    LogLevel GetLogLevel() const;
     void SetLogFile(const String& filename);
+    // Stops file logging. Interactive mode calls this between scans so a
+    // later scan with a different output directory does not keep appending to
+    // the previous scan's log.
+    void CloseLogFile();
     void SetConsoleOutput(bool enable);
     void SetTimestampFormat(const String& format);
     

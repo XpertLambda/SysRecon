@@ -46,10 +46,13 @@ struct ScanConfig {
         StringVector custom_keys;
     } registry;
     
+    // Memory is off unless explicitly requested: it opens every non-system
+    // process for reading, which EDR products treat as hostile. This default
+    // also applies when no config file is found -- previously a missing
+    // config.json silently turned the memory module on.
     struct {
         bool enabled = false;
         bool create_dumps = false;
-        bool analyze_heap = false;
         bool scan_for_malware = true;
         size_t max_dump_size_mb = 100;
     } memory;
@@ -84,8 +87,13 @@ public:
     // Validation
     bool ValidateConfig() const;
     StringVector GetValidationErrors() const;
-    
-    
+
+    // Non-fatal problems from the last load: unknown keys, including options
+    // that existed in older versions and were removed because they did
+    // nothing (security.*, max_threads, analyze_heap, ...). Reported so an
+    // operator does not believe a setting is in effect when it is not.
+    const StringVector& GetWarnings() const { return warnings_; }
+
 private:
     ConfigManager() = default;
     ~ConfigManager() = default;
@@ -95,6 +103,7 @@ private:
     
     ScanConfig config_;
     mutable StringVector validation_errors_;
+    StringVector warnings_;
 };
 
 } // namespace Core

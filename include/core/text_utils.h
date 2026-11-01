@@ -55,6 +55,23 @@ bool TryParseIpv4(const WString& text, uint32_t& out);
 bool IsValidIpv4(const WString& text);
 bool IsPrivateIpv4(const WString& text);
 
+// True for 127.0.0.0/8. Services bound only to loopback are not reachable
+// from the network, so they are not reported as exposed.
+bool IsLoopbackIpv4(const WString& text);
+
+// Decodes a REG_SZ / REG_EXPAND_SZ buffer as returned by RegQueryValueEx /
+// RegEnumValue. Registry data is attacker-controlled: it is not guaranteed to
+// be NUL-terminated, may have an odd byte count, and may contain embedded
+// NULs. The result stops at the first NUL or at the end of the buffer,
+// whichever comes first, and never reads past `byte_count`.
+WString RegistryBufferToString(const wchar_t* data, size_t byte_count);
+
+// Makes an attacker-influenced name (e.g. a process name) safe to use as a
+// single file-name component: anything other than [A-Za-z0-9._-] becomes
+// '_', leading dots are replaced, and the result is capped at 64 characters.
+// Never returns an empty string.
+WString SanitizeFileName(const WString& name);
+
 }
 }
 }

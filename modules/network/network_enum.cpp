@@ -1,6 +1,7 @@
 #include "../../include/modules/network/network_enum.h"
 #include <iomanip>
 #include <lm.h>
+#include "../../include/core/text_utils.h"
 
 namespace SysRecon {
 namespace Modules {
@@ -22,45 +23,42 @@ bool NetworkEnumerator::Initialize() {
     return true;
 }
 
-bool NetworkEnumerator::EnumerateConnections() {
-    if (!initialized_) return false;
-    
-    SYSRECON_LOG_INFO(L"Enumerating network connections...");
-    
+bool NetworkEnumerator::LoadTables() {
 #ifdef _WIN32
-    // Re-enumeration must not append to prior results.
     connections_.clear();
+    process_names_ = Core::Utils::GetProcessNameMap();
 
     DWORD dwSize = 0;
-    DWORD dwRetVal = 0;
-
     // Size query. Anything other than ERROR_INSUFFICIENT_BUFFER means the
-    // table cannot be read; the old code carried on and passed a null pointer
-    // to the second call, then reported success with zero connections.
-    dwRetVal = GetTcpTable2(nullptr, &dwSize, TRUE);
+    // table cannot be read.
+    DWORD dwRetVal = GetTcpTable2(nullptr, &dwSize, TRUE);
     if (dwRetVal != ERROR_INSUFFICIENT_BUFFER) {
         SYSRECON_LOG_ERROR(L"GetTcpTable2 size query failed: " +
                            Core::Utils::GetLastErrorString(dwRetVal));
         return false;
     }
 
-    // unique_ptr: the previous `free()` sat inside the success branch, so the
-    // buffer leaked whenever the second call failed (which it legitimately can
-    // -- the table may grow between the two calls).
-    std::unique_ptr<void, decltype(&free)> tcp_buffer(malloc(dwSize), &free);
-    if (!tcp_buffer) {
-        SYSRECON_LOG_ERROR(L"Failed to allocate memory for TCP table");
-        return false;
+    // The table can grow between the size query and the read; retry a few
+    // times with the size the failed call reports.
+    std::vector<BYTE> tcp_buffer;
+    for (int attempt = 0; attempt < 4; ++attempt) {
+        tcp_buffer.resize(dwSize);
+        dwRetVal = GetTcpTable2(reinterpret_cast<PMIB_TCPTABLE2>(tcp_buffer.data()), &dwSize, TRUE);
+        if (dwRetVal != ERROR_INSUFFICIENT_BUFFER) {
+            break;
+        }
     }
-    auto* pTcpTable = static_cast<PMIB_TCPTABLE2>(tcp_buffer.get());
-
-    dwRetVal = GetTcpTable2(pTcpTable, &dwSize, TRUE);
     if (dwRetVal != NO_ERROR) {
-        SYSRECON_LOG_ERROR(L"GetTcpTable2 failed: " +
-                           Core::Utils::GetLastErrorString(dwRetVal));
+        SYSRECON_LOG_ERROR(L"GetTcpTable2 failed: " + Core::Utils::GetLastErrorString(dwRetVal));
         return false;
     }
 
+    auto name_of = [this](DWORD pid) {
+        auto it = process_names_.find(pid);
+        return it == process_names_.end() ? String(L"(unknown)") : it->second;
+    };
+
+    const auto* pTcpTable = reinterpret_cast<const MIB_TCPTABLE2*>(tcp_buffer.data());
     for (DWORD i = 0; i < pTcpTable->dwNumEntries; i++) {
         const MIB_TCPROW2& row = pTcpTable->table[i];
 
@@ -72,69 +70,170 @@ bool NetworkEnumerator::EnumerateConnections() {
         conn.remote_port = ntohs((u_short)row.dwRemotePort);
         conn.state = ConnectionStateToString(row.dwState);
         conn.process_id = row.dwOwningPid;
+        conn.process_name = name_of(row.dwOwningPid);
         conn.risk_level = SecurityLevel::Low;
-
         connections_.push_back(conn);
     }
-    
-    // Get UDP table
-    PMIB_UDPTABLE_OWNER_PID pUdpTable = nullptr;
+
     dwSize = 0;
     dwRetVal = GetExtendedUdpTable(nullptr, &dwSize, TRUE, AF_INET, UDP_TABLE_OWNER_PID, 0);
-    
     if (dwRetVal == ERROR_INSUFFICIENT_BUFFER) {
-        pUdpTable = (MIB_UDPTABLE_OWNER_PID*)malloc(dwSize);
-        if (pUdpTable != nullptr) {
-            if (GetExtendedUdpTable(pUdpTable, &dwSize, TRUE, AF_INET, UDP_TABLE_OWNER_PID, 0) == NO_ERROR) {
-                for (DWORD i = 0; i < pUdpTable->dwNumEntries; i++) {
-                    MIB_UDPROW_OWNER_PID row = pUdpTable->table[i];
-                    
-                    NetworkConnection conn;
-                    conn.protocol = L"UDP";
-                    conn.local_address = Core::Utils::IpAddressToString(ntohl(row.dwLocalAddr));
-                    conn.local_port = ntohs((u_short)row.dwLocalPort);
-                    conn.remote_address = L"";
-                    conn.remote_port = 0;
-                    conn.state = L"LISTENING";
-                    conn.process_id = row.dwOwningPid;
-                    conn.risk_level = SecurityLevel::Low;
-                    
-                    connections_.push_back(conn);
-                }
+        std::vector<BYTE> udp_buffer;
+        for (int attempt = 0; attempt < 4; ++attempt) {
+            udp_buffer.resize(dwSize);
+            dwRetVal = GetExtendedUdpTable(udp_buffer.data(), &dwSize, TRUE, AF_INET, UDP_TABLE_OWNER_PID, 0);
+            if (dwRetVal != ERROR_INSUFFICIENT_BUFFER) {
+                break;
             }
-            free(pUdpTable);
+        }
+        if (dwRetVal == NO_ERROR) {
+            const auto* pUdpTable = reinterpret_cast<const MIB_UDPTABLE_OWNER_PID*>(udp_buffer.data());
+            for (DWORD i = 0; i < pUdpTable->dwNumEntries; i++) {
+                const MIB_UDPROW_OWNER_PID& row = pUdpTable->table[i];
+
+                NetworkConnection conn;
+                conn.protocol = L"UDP";
+                conn.local_address = Core::Utils::IpAddressToString(ntohl(row.dwLocalAddr));
+                conn.local_port = ntohs((u_short)row.dwLocalPort);
+                conn.remote_port = 0;
+                conn.state = L"BOUND";  // UDP has no connection state.
+                conn.process_id = row.dwOwningPid;
+                conn.process_name = name_of(row.dwOwningPid);
+                conn.risk_level = SecurityLevel::Low;
+                connections_.push_back(conn);
+            }
+        } else {
+            SYSRECON_LOG_WARNING(L"GetExtendedUdpTable failed: " + Core::Utils::GetLastErrorString(dwRetVal));
         }
     }
-    
-    SYSRECON_LOG_INFO(L"Enumerated " + std::to_wstring(connections_.size()) + L" connections");
+
+    tables_loaded_ = true;
     return true;
 #else
-    SYSRECON_LOG_INFO(L"Cross-compilation stub - feature available only on Windows");
+    tables_loaded_ = true;
     return true;
 #endif
 }
 
+bool NetworkEnumerator::EnumerateConnections() {
+    if (!initialized_) return false;
+
+    SYSRECON_LOG_INFO(L"Enumerating network connections...");
+    if (!LoadTables()) {
+        return false;
+    }
+    if (analyze_connections_) {
+        ReportConnections();
+    } else {
+        SYSRECON_LOG_DEBUG(L"Connection analysis disabled by config (network.analyze_connections)");
+    }
+    SYSRECON_LOG_INFO(L"Enumerated " + std::to_wstring(connections_.size()) + L" connections");
+    return true;
+}
+
 bool NetworkEnumerator::EnumerateListeningPorts() {
     if (!initialized_) return false;
-    
+
     SYSRECON_LOG_INFO(L"Enumerating listening ports...");
-    
+
+    // Load on demand: the quick scan calls this without EnumerateConnections,
+    // and previously always found zero listening ports as a result.
+    if (!tables_loaded_ && !LoadTables()) {
+        return false;
+    }
+
     listening_ports_.clear();
     for (const auto& conn : connections_) {
-        if (conn.state == L"LISTENING" || conn.state == L"LISTEN" || conn.protocol == L"UDP") {
-            ListeningPort listening_port;
-            listening_port.port = conn.local_port;
-            listening_port.protocol = conn.protocol;
-            listening_port.process_id = conn.process_id;
-            listening_port.address = conn.local_address;
-            listening_port.is_system_port = (conn.local_port < 1024);
-            listening_port.risk_level = SecurityLevel::Low;
-            listening_ports_.push_back(listening_port);
+        if (conn.state == L"LISTENING" || conn.protocol == L"UDP") {
+            ListeningPort port;
+            port.port = conn.local_port;
+            port.protocol = conn.protocol;
+            port.process_id = conn.process_id;
+            port.process_name = conn.process_name;
+            port.address = conn.local_address;
+            port.is_system_port = (conn.local_port < 1024);
+            port.is_filtered = false;
+            port.risk_level = AssessPortRisk(port);
+            listening_ports_.push_back(port);
         }
     }
-    
+
+    if (scan_listening_ports_) {
+        ReportListeningPorts();
+    } else {
+        SYSRECON_LOG_DEBUG(L"Listening-port findings disabled by config (network.scan_listening_ports)");
+    }
+
     SYSRECON_LOG_INFO(L"Found " + std::to_wstring(listening_ports_.size()) + L" listening ports");
     return true;
+}
+
+void NetworkEnumerator::ReportListeningPorts() {
+    StringVector exposed;
+    for (const auto& port : listening_ports_) {
+        // Loopback-only listeners are not reachable from the network.
+        if (Core::Text::IsLoopbackIpv4(port.address)) {
+            continue;
+        }
+        if (port.protocol == L"TCP") {
+            exposed.push_back(std::to_wstring(port.port) + L"/" + port.process_name);
+        }
+        if (port.risk_level == SecurityLevel::Low) {
+            continue;
+        }
+
+        ScanResult result;
+        result.module_name = L"Network";
+        result.item_name = port.protocol + L" " + std::to_wstring(port.port) + L" (" + port.process_name + L")";
+        result.description = L"Network-reachable service on a commonly attacked port";
+        result.risk_level = port.risk_level;
+        result.details[L"Address"] = port.address;
+        result.details[L"Port"] = std::to_wstring(port.port);
+        result.details[L"Protocol"] = port.protocol;
+        result.details[L"Process"] = port.process_name;
+        result.details[L"PID"] = std::to_wstring(port.process_id);
+        result.details[L"Note"] = L"Reachability also depends on the firewall; confirm the service is needed";
+        result.details[L"Technique"] = L"T1133 External Remote Services / T1210 Exploitation of Remote Services";
+        result.timestamp = std::chrono::system_clock::now();
+        scan_results_.push_back(result);
+    }
+
+    // One inventory entry rather than a finding per port.
+    std::sort(exposed.begin(), exposed.end());
+    exposed.erase(std::unique(exposed.begin(), exposed.end()), exposed.end());
+    ScanResult inventory;
+    inventory.module_name = L"Network";
+    inventory.item_name = L"Listening TCP ports";
+    inventory.description = std::to_wstring(exposed.size()) + L" TCP ports listening on non-loopback addresses";
+    inventory.risk_level = SecurityLevel::Low;
+    inventory.details[L"Ports"] = exposed.empty() ? String(L"(none)") : Core::Utils::Join(exposed, L", ");
+    inventory.timestamp = std::chrono::system_clock::now();
+    scan_results_.push_back(inventory);
+}
+
+void NetworkEnumerator::ReportConnections() {
+    for (auto& conn : connections_) {
+        if (conn.protocol != L"TCP" || conn.state != L"ESTABLISHED") {
+            continue;
+        }
+        conn.risk_level = AssessConnectionRisk(conn);
+        if (conn.risk_level == SecurityLevel::Low) {
+            continue;
+        }
+        ScanResult result;
+        result.module_name = L"Network";
+        result.item_name = conn.process_name + L" -> " + conn.remote_address + L":" + std::to_wstring(conn.remote_port);
+        result.description = L"Established connection to a port commonly used by backdoors and C2 frameworks";
+        result.risk_level = conn.risk_level;
+        result.details[L"Process"] = conn.process_name;
+        result.details[L"PID"] = std::to_wstring(conn.process_id);
+        result.details[L"Local"] = conn.local_address + L":" + std::to_wstring(conn.local_port);
+        result.details[L"Remote"] = conn.remote_address + L":" + std::to_wstring(conn.remote_port);
+        result.details[L"Note"] = L"Port numbers alone prove nothing; verify the process and destination";
+        result.details[L"Technique"] = L"T1571 Non-Standard Port";
+        result.timestamp = std::chrono::system_clock::now();
+        scan_results_.push_back(result);
+    }
 }
 
 bool NetworkEnumerator::EnumerateInterfaces() {
@@ -143,6 +242,7 @@ bool NetworkEnumerator::EnumerateInterfaces() {
     SYSRECON_LOG_INFO(L"Enumerating network interfaces...");
     
 #ifdef _WIN32
+    interfaces_.clear();
     // Get adapter information
     ULONG buffer_size = 15000; // Initial buffer size
     PIP_ADAPTER_INFO adapter_info = (IP_ADAPTER_INFO*)malloc(buffer_size);
@@ -276,6 +376,7 @@ bool NetworkEnumerator::EnumerateShares() {
     SYSRECON_LOG_INFO(L"Enumerating network shares...");
     
 #ifdef _WIN32
+    shares_.clear();
     NET_API_STATUS status;
     PSHARE_INFO_2 share_info = NULL;
     DWORD entries_read = 0;
@@ -358,51 +459,96 @@ bool NetworkEnumerator::EnumerateShares() {
 
 bool NetworkEnumerator::AnalyzeFirewall() {
     if (!initialized_) return false;
-    
+
     SYSRECON_LOG_INFO(L"Analyzing firewall configuration...");
-    
+
 #ifdef _WIN32
-    // Check if Windows Firewall is enabled
-    // This requires COM and Windows Firewall API
-    
-    // Simplified check: look for firewall service
+    // 1. Is the firewall service running at all?
+    bool service_running = false;
+    bool service_known = false;
     SC_HANDLE scm = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT);
-    if (scm == NULL) {
-        SYSRECON_LOG_ERROR(L"Failed to open service control manager");
-        return false;
-    }
-    
-    // Check Windows Firewall service (MpsSvc)
-    SC_HANDLE service = OpenServiceW(scm, L"MpsSvc", SERVICE_QUERY_STATUS);
-    if (service == NULL) {
-        SYSRECON_LOG_WARNING(L"Windows Firewall service not found");
+    if (scm != NULL) {
+        SC_HANDLE service = OpenServiceW(scm, L"MpsSvc", SERVICE_QUERY_STATUS);
+        if (service != NULL) {
+            SERVICE_STATUS status;
+            if (QueryServiceStatus(service, &status)) {
+                service_known = true;
+                service_running = (status.dwCurrentState == SERVICE_RUNNING);
+            }
+            CloseServiceHandle(service);
+        }
         CloseServiceHandle(scm);
+    }
+    if (!service_known) {
+        SYSRECON_LOG_ERROR(L"Could not query the Windows Firewall service (MpsSvc)");
         return false;
     }
-    
-    SERVICE_STATUS status;
-    if (QueryServiceStatus(service, &status)) {
+
+    if (!service_running) {
+        ScanResult result;
+        result.module_name = L"Firewall";
+        result.item_name = L"Windows Firewall service";
+        result.description = L"Windows Firewall service (MpsSvc) is not running";
+        result.risk_level = SecurityLevel::High;
+        result.details[L"Status"] = L"Stopped";
+        result.details[L"Technique"] = L"T1562.004 Impair Defenses: Disable or Modify System Firewall";
+        result.details[L"Remediation"] = L"Invoke-SysReconHardening.ps1 -Include Firewall";
+        result.timestamp = std::chrono::system_clock::now();
+        scan_results_.push_back(result);
+    }
+
+    // 2. Per-profile state. A running service with a disabled profile is the
+    // common real-world case, and the old service-only check reported it as
+    // "Windows Firewall is running". Group Policy values take precedence.
+    struct Profile { const wchar_t* label; const wchar_t* local_key; const wchar_t* policy_key; };
+    const Profile profiles[] = {
+        { L"Domain",
+          L"SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\DomainProfile",
+          L"SOFTWARE\\Policies\\Microsoft\\WindowsFirewall\\DomainProfile" },
+        { L"Private",
+          L"SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\StandardProfile",
+          L"SOFTWARE\\Policies\\Microsoft\\WindowsFirewall\\PrivateProfile" },
+        { L"Public",
+          L"SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\PublicProfile",
+          L"SOFTWARE\\Policies\\Microsoft\\WindowsFirewall\\PublicProfile" },
+    };
+
+    StringVector enabled_profiles;
+    for (const auto& p : profiles) {
+        auto policy = Core::Utils::TryReadRegistryDword(HKEY_LOCAL_MACHINE, p.policy_key, L"EnableFirewall");
+        auto local = Core::Utils::TryReadRegistryDword(HKEY_LOCAL_MACHINE, p.local_key, L"EnableFirewall");
+        const auto effective = policy ? policy : local;
+        if (!effective) {
+            continue;  // Unknown; do not guess.
+        }
+        if (*effective != 0) {
+            enabled_profiles.push_back(p.label);
+            continue;
+        }
+        ScanResult result;
+        result.module_name = L"Firewall";
+        result.item_name = String(p.label) + L" firewall profile";
+        result.description = String(L"Windows Firewall is disabled for the ") + p.label + L" profile";
+        result.risk_level = (std::wstring(p.label) == L"Public") ? SecurityLevel::High : SecurityLevel::Medium;
+        result.details[L"Source"] = policy ? L"Group Policy" : L"Local setting";
+        result.details[L"EnableFirewall"] = L"0";
+        result.details[L"Technique"] = L"T1562.004 Impair Defenses: Disable or Modify System Firewall";
+        result.details[L"Remediation"] = L"Invoke-SysReconHardening.ps1 -Include Firewall";
+        result.timestamp = std::chrono::system_clock::now();
+        scan_results_.push_back(result);
+    }
+
+    if (service_running && enabled_profiles.size() == 3) {
         ScanResult result;
         result.module_name = L"Firewall";
         result.item_name = L"Windows Firewall";
-        
-        if (status.dwCurrentState == SERVICE_RUNNING) {
-            result.description = L"Windows Firewall is running";
-            result.risk_level = SecurityLevel::Low;
-            result.details[L"status"] = L"Running";
-        } else {
-            result.description = L"Windows Firewall is not running";
-            result.risk_level = SecurityLevel::High;
-            result.details[L"status"] = L"Stopped";
-            result.details[L"warning"] = L"Firewall is disabled - system is unprotected";
-        }
-        
+        result.description = L"Windows Firewall is running with all profiles enabled";
+        result.risk_level = SecurityLevel::Low;
+        result.details[L"Profiles"] = Core::Utils::Join(enabled_profiles, L", ");
+        result.timestamp = std::chrono::system_clock::now();
         scan_results_.push_back(result);
     }
-    
-    CloseServiceHandle(service);
-    CloseServiceHandle(scm);
-    
+
     SYSRECON_LOG_INFO(L"Firewall analysis complete");
     return true;
 #else
@@ -412,6 +558,8 @@ bool NetworkEnumerator::AnalyzeFirewall() {
 }
 
 void NetworkEnumerator::Cleanup() {
+    tables_loaded_ = false;
+    process_names_.clear();
     connections_.clear();
     listening_ports_.clear();
     interfaces_.clear();
@@ -439,22 +587,41 @@ String NetworkEnumerator::ConnectionStateToString(DWORD state) {
 }
 
 SecurityLevel NetworkEnumerator::AssessConnectionRisk(const NetworkConnection& connection) {
-    // Connections to suspicious ports or addresses
-    if (connection.remote_port == 4444 || connection.remote_port == 5555) {
-        return SecurityLevel::High; // Common backdoor ports
+    // Default ports of common post-exploitation frameworks and IRC botnets. A
+    // port number is a weak signal on its own, hence Medium, never High.
+    switch (connection.remote_port) {
+        case 4444: case 4445: case 5555: case 1337: case 31337:
+        case 6666: case 6667: case 6697: case 12345: case 54321:
+            return SecurityLevel::Medium;
+        default:
+            return SecurityLevel::Low;
     }
-    return SecurityLevel::Low;
 }
 
 SecurityLevel NetworkEnumerator::AssessPortRisk(const ListeningPort& port) {
-    // Check for risky open ports
-    if (port.port == 445 || port.port == 139) { // SMB
-        return SecurityLevel::Medium;
+    if (port.protocol == L"TCP") {
+        switch (port.port) {
+            case 23:                                       // Telnet: cleartext remote shell.
+                return SecurityLevel::High;
+            case 21:                                       // FTP: cleartext credentials.
+            case 3389:                                     // RDP.
+            case 5985: case 5986:                          // WinRM.
+            case 5900: case 5901: case 5902: case 5903:    // VNC.
+            case 1433:                                     // SQL Server.
+            case 4444: case 1337: case 31337:              // Backdoor defaults.
+                return SecurityLevel::Medium;
+            default:
+                return SecurityLevel::Low;
+        }
     }
-    if (port.port == 3389) { // RDP
-        return SecurityLevel::Medium;
+    // UDP
+    switch (port.port) {
+        case 69:   // TFTP: unauthenticated file transfer.
+        case 161:  // SNMP: frequently left with default communities.
+            return SecurityLevel::Medium;
+        default:
+            return SecurityLevel::Low;
     }
-    return SecurityLevel::Low;
 }
 
 SecurityLevel NetworkEnumerator::AssessShareRisk(const NetworkShare& share) {

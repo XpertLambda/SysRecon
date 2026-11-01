@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../../sysrecon.h"
+#include <set>
 
 namespace SysRecon {
 namespace Modules {
@@ -45,6 +46,10 @@ public:
     bool Initialize();
     bool EnumerateUsers();
     bool EnumerateGroups();
+    // Local password and lockout policy (NetUserModalsGet). Feeds the same
+    // CIS L1 controls that hardening/Invoke-SysReconHardening.ps1 applies,
+    // so audit -> remediate -> re-audit actually closes.
+    bool AnalyzePasswordPolicy();
     void Cleanup();
     
     // Results access
@@ -75,6 +80,11 @@ private:
     // Analysis helpers
     void AnalyzeUserAccount(const UserAccount& user);
     
+    // Membership of BUILTIN\Administrators, resolved once by well-known SID
+    // (the group's *name* is localised: "Administratoren", "Administrateurs").
+    void LoadAdministratorMembers();
+    bool IsAdministratorMember(const String& username) const;
+
     // Utility methods
     String SidToString(PSID sid);
     DWORD GetUserFlags(const String& username);
@@ -82,6 +92,8 @@ private:
     
     // Configuration
     bool enumerate_groups_;
+    std::set<String> admin_members_;  // Lower-cased, both "name" and "domain\\name".
+    bool admin_members_loaded_ = false;
     
     // Data storage
     std::vector<UserAccount> users_;

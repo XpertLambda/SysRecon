@@ -1,5 +1,5 @@
-#include "../include/core/engine.h"
-#include "../include/core/config.h"
+#include "../../include/core/engine.h"
+#include "../../include/core/config.h"
 
 namespace SysRecon {
 namespace Core {
@@ -9,50 +9,75 @@ ScanEngine& ScanEngine::Instance() {
     return instance;
 }
 
-void ScanEngine::LoadConfig(const String& config_file) {
+void ScanEngine::Reset() {
+    DestroyModules();
+    ConfigManager::Instance().LoadDefaults();
+    config_loaded_ = false;
+    config_path_.clear();
+    output_directory_.clear();
+    stealth_mode_ = false;
+    selection_ = ModuleSelection::FromConfig(ScanConfig{});
+    progress_.store(0.0f);
+    current_module_.clear();
+    ClearResults();
+    std::lock_guard<std::mutex> lock(error_mutex_);
+    error_messages_.clear();
+}
+
+bool ScanEngine::LoadConfig(const String& config_file) {
     ConfigManager& config_mgr = ConfigManager::Instance();
     if (!config_mgr.LoadFromFile(config_file)) {
-        SYSRECON_LOG_WARNING(L"Failed to load configuration, using defaults");
-        return;
+        for (const auto& err : config_mgr.GetValidationErrors()) {
+            SYSRECON_LOG_WARNING(L"Config: " + err);
+        }
+        SYSRECON_LOG_WARNING(L"Failed to load configuration from " + config_file +
+                             L"; using built-in defaults");
+        return false;
     }
     SYSRECON_LOG_INFO(L"Configuration loaded from: " + config_file);
 
-    // Apply the file's module selection to the engine. Nothing did this
-    // before: config.json was parsed and then entirely ignored, while the
-    // engine consulted only its own default-true map. Must run before
-    // Initialize(), which constructs modules based on this selection.
-    const ScanConfig& cfg = config_mgr.GetConfig();
-
-    auto select = [this](ModuleType type, bool enabled) {
-        if (enabled) {
-            EnableModule(type);
-        } else {
-            DisableModule(type);
-        }
-    };
-    select(ModuleType::Accounts,  cfg.accounts.enabled);
-    select(ModuleType::Services,  cfg.services.enabled);
-    select(ModuleType::Processes, cfg.processes.enabled);
-    select(ModuleType::Network,   cfg.network.enabled);
-    select(ModuleType::Registry,  cfg.registry.enabled);
-    select(ModuleType::Memory,    cfg.memory.enabled);
-
-    if (!cfg.output.output_directory.empty()) {
-        SetOutputDirectory(cfg.output.output_directory);
-    }
-    SetStealthMode(cfg.stealth_mode);
-    SetVerboseMode(cfg.verbose_output);
-
+    config_path_ = config_file;
     config_loaded_ = true;
+
+    const ScanConfig& cfg = config_mgr.GetConfig();
+    selection_ = ModuleSelection::FromConfig(cfg);
+
+    // A relative output_directory is relative to the config file, not to the
+    // process's working directory. An elevated prompt starts in System32, so
+    // "./reports" previously meant C:\Windows\System32\reports.
+    const String config_dir = ParentDirectory(config_file);
+    SetOutputDirectory(ResolveAgainst(config_dir, cfg.output.output_directory));
+    // The config can turn stealth on but never off: `stealth_mode: false`
+    // must not re-enable console logging that --stealth already silenced.
+    if (cfg.stealth_mode) {
+        SetStealthMode(true);
+    }
+    return true;
+}
+
+void ScanEngine::SetModuleSelection(const ModuleSelection& selection) {
+    selection_ = selection;
+}
+
+void ScanEngine::EnableModule(ModuleType module) {
+    selection_.Set(module, true);
+}
+
+void ScanEngine::DisableModule(ModuleType module) {
+    selection_.Set(module, false);
+}
+
+bool ScanEngine::IsModuleEnabled(ModuleType module) const {
+    return selection_.IsEnabled(module);
 }
 
 void ScanEngine::ApplyConfigToModules() {
     const ScanConfig& cfg = ConfigManager::Instance().GetConfig();
 
-    // Module setters existed but were never called from anywhere, so every
-    // per-module option in config.json was decoration.
     if (process_enum_) {
-        process_enum_->SetCheckDlls(cfg.processes.check_dlls);
+        // Per-process module snapshots open a handle to every process; stealth
+        // mode skips them.
+        process_enum_->SetCheckDlls(cfg.processes.check_dlls && !stealth_mode_);
     }
     if (registry_analyzer_) {
         registry_analyzer_->SetScanStartupKeys(cfg.registry.scan_startup_keys);
@@ -62,9 +87,14 @@ void ScanEngine::ApplyConfigToModules() {
             registry_analyzer_->AddCustomKey(key);
         }
     }
+    if (network_enum_) {
+        // These two were parsed from config.json and never passed on at all.
+        network_enum_->SetScanListeningPorts(cfg.network.scan_listening_ports);
+        network_enum_->SetAnalyzeConnections(cfg.network.analyze_connections);
+    }
     if (memory_analyzer_) {
+        memory_analyzer_->SetScanForMalware(cfg.memory.scan_for_malware);
         memory_analyzer_->SetCreateDumps(cfg.memory.create_dumps);
-        memory_analyzer_->SetAnalyzeHeap(cfg.memory.analyze_heap);
         memory_analyzer_->SetMaxDumpSize(cfg.memory.max_dump_size_mb * 1024 * 1024);
     }
     if (user_enum_) {
@@ -83,213 +113,191 @@ void ScanEngine::SetOutputDirectory(const String& output_dir) {
     }
 }
 
-void ScanEngine::SetVerboseMode(bool verbose) {
-    verbose_mode_ = verbose;
-    Logger::Instance().SetLogLevel(verbose ? LogLevel::Debug : LogLevel::Info);
-}
-
 void ScanEngine::SetStealthMode(bool stealth) {
     stealth_mode_ = stealth;
+    Logger::Instance().SetConsoleOutput(!stealth);
     if (stealth) {
-        Logger::Instance().SetConsoleOutput(false);
         SYSRECON_LOG_INFO(L"Stealth mode enabled");
     }
-}
-
-void ScanEngine::EnableModule(ModuleType module) {
-    enabled_modules_[module] = true;
-}
-
-void ScanEngine::DisableModule(ModuleType module) {
-    enabled_modules_[module] = false;
-}
-
-bool ScanEngine::IsModuleEnabled(ModuleType module) const {
-    auto it = enabled_modules_.find(module);
-    return (it != enabled_modules_.end()) ? it->second : true;
 }
 
 bool ScanEngine::Initialize() {
     SYSRECON_LOG_INFO(L"Initializing SysRecon scan engine");
 
-    const bool is_admin = CheckPrivileges();
-    if (!is_admin) {
+    is_elevated_ = CheckPrivileges();
+    if (!is_elevated_) {
         SYSRECON_LOG_WARNING(L"Not running as Administrator: results will be incomplete");
     }
 
-    // require_admin was parsed from config.json and never enforced. It is only
-    // honoured when a config file was actually loaded: the in-code default is
-    // true, so enforcing it unconditionally would abort every non-admin run
-    // even with no config file present.
-    if (config_loaded_ && ConfigManager::Instance().GetConfig().require_admin && !is_admin) {
+    // require_admin is only honoured when a config file was actually loaded:
+    // the in-code default is true, so enforcing it unconditionally would abort
+    // every non-admin run even with no config file present.
+    if (config_loaded_ && ConfigManager::Instance().GetConfig().require_admin && !is_elevated_) {
         SYSRECON_LOG_ERROR(L"Configuration requires Administrator privileges "
                            L"(general.require_admin); aborting");
         return false;
     }
 
+    if (!selection_.Any()) {
+        SYSRECON_LOG_ERROR(L"No scan modules selected");
+        return false;
+    }
+
 #ifdef _WIN32
     // SE_DEBUG_NAME is process-wide and is needed by the process and memory
-    // modules to open other processes. It used to be enabled only as a side
-    // effect of UserEnumerator::Initialize -- the module that needs it least --
-    // so it worked purely because Accounts happened to be constructed first.
-    // Running `--processes` alone left it disabled and silently produced
-    // empty results.
-    if (!Core::Utils::EnableDebugPrivilege()) {
-        SYSRECON_LOG_WARNING(L"Could not enable SeDebugPrivilege: "
-                             L"process and memory inspection will be limited");
+    // modules to open other processes.
+    if (selection_.processes || selection_.memory) {
+        if (!Core::Utils::EnableDebugPrivilege()) {
+            SYSRECON_LOG_WARNING(L"Could not enable SeDebugPrivilege: "
+                                 L"process and memory inspection will be limited");
+        }
     }
 #endif
-    
+
     if (output_directory_.empty()) {
-        output_directory_ = L"./reports";
-        SetOutputDirectory(output_directory_);
+        SetOutputDirectory(L"./reports");
     }
-    
+
     if (!InitializeModules()) {
         SYSRECON_LOG_ERROR(L"Failed to initialize modules");
         return false;
     }
-    
-    SYSRECON_LOG_INFO(L"Scan engine initialized successfully");
+
+    SYSRECON_LOG_INFO(L"Scan engine initialized (" + Utils::Join(selection_.Names(), L", ") + L")");
     return true;
 }
 
 bool ScanEngine::RunFullScan() {
-    if (is_scanning_.load()) {
+    if (is_scanning_.exchange(true)) {
         SYSRECON_LOG_WARNING(L"Scan already in progress");
         return false;
     }
-    
-    is_scanning_.store(true);
+
     progress_.store(0.0f);
     ClearResults();
-    
+
     SYSRECON_LOG_INFO(L"Starting full system scan");
-    
+
     try {
-        // Divide progress across the modules that will actually run. The
-        // hardcoded /6 meant a single-module scan stopped at 17% and then
-        // jumped to 100.
-        const ModuleType all_modules[] = {
-            ModuleType::Accounts, ModuleType::Services, ModuleType::Processes,
-            ModuleType::Network,  ModuleType::Registry, ModuleType::Memory
+        struct Step {
+            ModuleType type;
+            const wchar_t* label;
+            bool constructed;
         };
-        int enabled_count = 0;
-        for (ModuleType m : all_modules) {
-            if (IsModuleEnabled(m)) {
-                enabled_count++;
-            }
-        }
-        float step_progress = enabled_count > 0 ? (100.0f / enabled_count) : 100.0f;
+        const Step steps[] = {
+            { ModuleType::Accounts,  L"User Accounts", user_enum_ != nullptr },
+            { ModuleType::Services,  L"Services",      service_enum_ != nullptr },
+            { ModuleType::Processes, L"Processes",     process_enum_ != nullptr },
+            { ModuleType::Network,   L"Network",       network_enum_ != nullptr },
+            { ModuleType::Registry,  L"Registry",      registry_analyzer_ != nullptr },
+            { ModuleType::Memory,    L"Memory",        memory_analyzer_ != nullptr },
+        };
+
+        // Divide progress across the modules that will actually run.
+        const size_t enabled_count = selection_.Count();
+        const float step_progress = enabled_count > 0 ? (100.0f / enabled_count) : 100.0f;
         float current_progress = 0.0f;
-        
-        if (IsModuleEnabled(ModuleType::Accounts)) {
-            UpdateProgress(current_progress, L"User Accounts");
-            if (user_enum_ && !RunModuleScan(ModuleType::Accounts)) {
-                SYSRECON_LOG_ERROR(L"User account enumeration failed");
+
+        for (const auto& step : steps) {
+            if (!IsModuleEnabled(step.type)) {
+                continue;
+            }
+            UpdateProgress(current_progress, step.label);
+            if (!step.constructed) {
+                // Cannot happen with the documented lifecycle; if it does, say
+                // so instead of reporting a clean scan of a module that never ran.
+                AddError(String(step.label) + L": module was selected but not initialized");
+            } else if (!RunModuleScan(step.type)) {
+                SYSRECON_LOG_WARNING(String(step.label) + L": one or more checks did not complete");
             }
             current_progress += step_progress;
         }
-        
-        if (IsModuleEnabled(ModuleType::Services)) {
-            UpdateProgress(current_progress, L"Services");
-            if (service_enum_ && !RunModuleScan(ModuleType::Services)) {
-                SYSRECON_LOG_ERROR(L"Service enumeration failed");
-            }
-            current_progress += step_progress;
-        }
-        
-        if (IsModuleEnabled(ModuleType::Processes)) {
-            UpdateProgress(current_progress, L"Processes");
-            if (process_enum_ && !RunModuleScan(ModuleType::Processes)) {
-                SYSRECON_LOG_ERROR(L"Process enumeration failed");
-            }
-            current_progress += step_progress;
-        }
-        
-        if (IsModuleEnabled(ModuleType::Network)) {
-            UpdateProgress(current_progress, L"Network");
-            if (network_enum_ && !RunModuleScan(ModuleType::Network)) {
-                SYSRECON_LOG_ERROR(L"Network enumeration failed");
-            }
-            current_progress += step_progress;
-        }
-        
-        if (IsModuleEnabled(ModuleType::Registry)) {
-            UpdateProgress(current_progress, L"Registry");
-            if (registry_analyzer_ && !RunModuleScan(ModuleType::Registry)) {
-                SYSRECON_LOG_ERROR(L"Registry analysis failed");
-            }
-            current_progress += step_progress;
-        }
-        
-        if (IsModuleEnabled(ModuleType::Memory)) {
-            UpdateProgress(current_progress, L"Memory");
-            if (memory_analyzer_ && !RunModuleScan(ModuleType::Memory)) {
-                SYSRECON_LOG_ERROR(L"Memory analysis failed");
-            }
-            current_progress += step_progress;
-        }
-        
+
         UpdateProgress(100.0f, L"Complete");
-        
+
     } catch (const std::exception& e) {
-        SYSRECON_LOG_ERROR(L"Scan failed with exception: " + Core::Utils::Utf8ToWide(e.what()));
+        AddError(L"Scan aborted with exception: " + Core::Utils::Utf8ToWide(e.what()));
         is_scanning_.store(false);
         return false;
     }
-    
+
     is_scanning_.store(false);
-    SYSRECON_LOG_INFO(L"Full scan completed successfully");
+    SYSRECON_LOG_INFO(L"Full scan completed");
     return true;
 }
 
 bool ScanEngine::RunQuickScan() {
+    if (is_scanning_.exchange(true)) {
+        SYSRECON_LOG_WARNING(L"Scan already in progress");
+        return false;
+    }
+    ClearResults();
     SYSRECON_LOG_INFO(L"Starting quick scan (essential checks only)");
 
-    // A failure in one module must not discard the findings of the others --
-    // the earlier `success &= ...` meant a single failing check (e.g.
-    // NetUserEnum on a host with no local accounts) threw away the whole scan
-    // and produced no report at all. Failures are recorded and surfaced via
-    // GetErrors(); the scan itself succeeds if it ran to completion. This
-    // matches RunFullScan's contract.
-    if (IsModuleEnabled(ModuleType::Accounts) && user_enum_) {
-        if (!user_enum_->EnumerateUsers()) {
-            AddError(L"Quick scan: user enumeration failed");
+    // A failure in one module must not discard the findings of the others:
+    // failures are recorded and surfaced via GetErrors(); the scan itself
+    // succeeds if it ran to completion. This matches RunFullScan's contract.
+    try {
+        if (IsModuleEnabled(ModuleType::Accounts) && user_enum_) {
+            UpdateProgress(0.0f, L"User Accounts");
+            if (!user_enum_->EnumerateUsers()) {
+                AddError(L"Quick scan: user enumeration failed");
+            }
         }
+        if (IsModuleEnabled(ModuleType::Services) && service_enum_) {
+            UpdateProgress(25.0f, L"Services");
+            if (!service_enum_->EnumerateServices()) {
+                AddError(L"Quick scan: service enumeration failed");
+            }
+        }
+        if (IsModuleEnabled(ModuleType::Network) && network_enum_) {
+            UpdateProgress(50.0f, L"Network");
+            // EnumerateListeningPorts now loads the TCP/UDP tables itself;
+            // before, the quick scan never called EnumerateConnections and so
+            // always reported zero listening ports.
+            if (!network_enum_->EnumerateListeningPorts()) {
+                AddError(L"Quick scan: listening port enumeration failed");
+            }
+            if (!network_enum_->AnalyzeFirewall()) {
+                AddError(L"Quick scan: firewall analysis failed");
+            }
+        }
+        if (IsModuleEnabled(ModuleType::Registry) && registry_analyzer_) {
+            UpdateProgress(75.0f, L"Registry");
+            if (!registry_analyzer_->AnalyzeStartupKeys()) {
+                AddError(L"Quick scan: registry startup analysis failed");
+            }
+        }
+        if (IsModuleEnabled(ModuleType::Processes) || IsModuleEnabled(ModuleType::Memory)) {
+            SYSRECON_LOG_INFO(L"Quick scan skips the Processes and Memory modules");
+        }
+        UpdateProgress(100.0f, L"Complete");
+    } catch (const std::exception& e) {
+        AddError(L"Quick scan aborted with exception: " + Core::Utils::Utf8ToWide(e.what()));
+        is_scanning_.store(false);
+        return false;
     }
 
-    if (IsModuleEnabled(ModuleType::Services) && service_enum_) {
-        if (!service_enum_->EnumerateServices()) {
-            AddError(L"Quick scan: service enumeration failed");
-        }
-    }
-
-    if (IsModuleEnabled(ModuleType::Network) && network_enum_) {
-        if (!network_enum_->EnumerateListeningPorts()) {
-            AddError(L"Quick scan: listening port enumeration failed");
-        }
-    }
-
-    if (IsModuleEnabled(ModuleType::Registry) && registry_analyzer_) {
-        if (!registry_analyzer_->AnalyzeStartupKeys()) {
-            AddError(L"Quick scan: registry startup analysis failed");
-        }
-    }
-
+    is_scanning_.store(false);
     return true;
 }
 
 bool ScanEngine::RunModuleScan(ModuleType module) {
-    // Each step runs independently and every failure is recorded. These were
-    // previously chained with &&, so one failing check silently skipped the
-    // rest -- e.g. a failed EnumerateConnections() meant listening ports and
-    // interfaces were never enumerated at all.
+    // Each step runs independently and every failure is recorded, so one
+    // failing check never silently skips the rest.
     auto run_all = [this](const String& module_label,
                           std::initializer_list<std::pair<const wchar_t*, std::function<bool()>>> steps) {
         bool all_ok = true;
         for (const auto& step : steps) {
-            if (!step.second()) {
+            bool ok = false;
+            try {
+                ok = step.second();
+            } catch (const std::exception& e) {
+                AddError(module_label + L": " + step.first + L" threw: " + Utils::Utf8ToWide(e.what()));
+                all_ok = false;
+                continue;
+            }
+            if (!ok) {
                 AddError(module_label + L": " + step.first + L" failed");
                 all_ok = false;
             }
@@ -303,6 +311,7 @@ bool ScanEngine::RunModuleScan(ModuleType module) {
                 return run_all(L"Accounts", {
                     {L"user enumeration",  [&] { return user_enum_->EnumerateUsers(); }},
                     {L"group enumeration", [&] { return user_enum_->EnumerateGroups(); }},
+                    {L"password policy",   [&] { return user_enum_->AnalyzePasswordPolicy(); }},
                 });
             }
             break;
@@ -349,8 +358,10 @@ bool ScanEngine::RunModuleScan(ModuleType module) {
 
         case ModuleType::Memory:
             if (memory_analyzer_) {
+                // Unchanged in this revision (see CHANGELOG "Known limitations":
+                // the malware scan still has no populated process inventory).
                 return run_all(L"Memory", {
-                    {L"malware scan",      [&] { return memory_analyzer_->ScanForMalware(); }},
+                    {L"malware scan",        [&] { return memory_analyzer_->ScanForMalware(); }},
                     {L"injection detection", [&] { return memory_analyzer_->DetectInjection(); }},
                 });
             }
@@ -363,16 +374,19 @@ bool ScanEngine::RunModuleScan(ModuleType module) {
     return false;
 }
 
+void ScanEngine::DestroyModules() {
+    user_enum_.reset();
+    service_enum_.reset();
+    process_enum_.reset();
+    network_enum_.reset();
+    registry_analyzer_.reset();
+    memory_analyzer_.reset();
+    report_generator_.reset();
+}
+
 void ScanEngine::Cleanup() {
     SYSRECON_LOG_INFO(L"Cleaning up scan engine resources");
-    
-    if (user_enum_) user_enum_->Cleanup();
-    if (service_enum_) service_enum_->Cleanup();
-    if (process_enum_) process_enum_->Cleanup();
-    if (network_enum_) network_enum_->Cleanup();
-    if (registry_analyzer_) registry_analyzer_->Cleanup();
-    if (memory_analyzer_) memory_analyzer_->Cleanup();
-    
+    DestroyModules();
     ClearResults();
 }
 
@@ -381,85 +395,72 @@ void ScanEngine::ClearResults() {
     scan_results_.clear();
 }
 
+void ScanEngine::CollectResults() {
+    scan_results_.clear();
+
+    auto collect = [this](const ScanResults& module_results, const wchar_t* label) {
+        scan_results_.insert(scan_results_.end(), module_results.begin(), module_results.end());
+        SYSRECON_LOG_DEBUG(L"Collected " + std::to_wstring(module_results.size()) + L" " + label + L" results");
+    };
+    if (user_enum_)         collect(user_enum_->GetScanResults(), L"account");
+    if (service_enum_)      collect(service_enum_->GetScanResults(), L"service");
+    if (process_enum_)      collect(process_enum_->GetScanResults(), L"process");
+    if (network_enum_)      collect(network_enum_->GetScanResults(), L"network");
+    if (registry_analyzer_) collect(registry_analyzer_->GetScanResults(), L"registry");
+    if (memory_analyzer_)   collect(memory_analyzer_->GetScanResults(), L"memory");
+
+    // Highest risk first, so the top of every report is what matters most.
+    std::stable_sort(scan_results_.begin(), scan_results_.end(),
+                     [](const ScanResult& a, const ScanResult& b) { return a.risk_level > b.risk_level; });
+
+    SYSRECON_LOG_INFO(L"Total scan results collected: " + std::to_wstring(scan_results_.size()));
+}
+
 bool ScanEngine::ExportResults(const String& format, const String& filename) {
     if (!report_generator_) {
         SYSRECON_LOG_ERROR(L"Report generator not initialized");
         return false;
     }
-    
+
     SYSRECON_LOG_INFO(L"Exporting results to: " + filename);
-    
+
     std::lock_guard<std::mutex> lock(results_mutex_);
-    scan_results_.clear();
-    
-    // Collect results from all modules
-    if (user_enum_) {
-        const auto& module_results = user_enum_->GetScanResults();
-        scan_results_.insert(scan_results_.end(), module_results.begin(), module_results.end());
-        SYSRECON_LOG_DEBUG(L"Collected " + std::to_wstring(module_results.size()) + L" user results");
-    }
-    
-    if (service_enum_) {
-        const auto& module_results = service_enum_->GetScanResults();
-        scan_results_.insert(scan_results_.end(), module_results.begin(), module_results.end());
-        SYSRECON_LOG_DEBUG(L"Collected " + std::to_wstring(module_results.size()) + L" service results");
-    }
-    
-    if (process_enum_) {
-        const auto& module_results = process_enum_->GetScanResults();
-        scan_results_.insert(scan_results_.end(), module_results.begin(), module_results.end());
-        SYSRECON_LOG_DEBUG(L"Collected " + std::to_wstring(module_results.size()) + L" process results");
-    }
-    
-    if (network_enum_) {
-        const auto& module_results = network_enum_->GetScanResults();
-        scan_results_.insert(scan_results_.end(), module_results.begin(), module_results.end());
-        SYSRECON_LOG_DEBUG(L"Collected " + std::to_wstring(module_results.size()) + L" network results");
-    }
-    
-    if (registry_analyzer_) {
-        const auto& module_results = registry_analyzer_->GetScanResults();
-        scan_results_.insert(scan_results_.end(), module_results.begin(), module_results.end());
-        SYSRECON_LOG_DEBUG(L"Collected " + std::to_wstring(module_results.size()) + L" registry results");
-    }
-    
-    if (memory_analyzer_) {
-        const auto& module_results = memory_analyzer_->GetScanResults();
-        scan_results_.insert(scan_results_.end(), module_results.begin(), module_results.end());
-        SYSRECON_LOG_DEBUG(L"Collected " + std::to_wstring(module_results.size()) + L" memory results");
-    }
-    
-    SYSRECON_LOG_INFO(L"Total scan results collected: " + std::to_wstring(scan_results_.size()));
-    
+    CollectResults();
     report_generator_->SetScanResults(scan_results_);
-    
-    // Set system info
+
     Modules::SystemInfo sys_info;
     sys_info.computer_name = Core::Utils::GetComputerName();
     sys_info.os_version = Core::Utils::GetWindowsVersion();
-    sys_info.architecture = Core::Utils::IsWow64Process() ? L"x86" : L"x64";
+    sys_info.architecture = Core::Utils::IsWow64Process() ? L"x86 (WOW64)" : L"x64";
     sys_info.scan_time = std::chrono::system_clock::now();
     sys_info.sysrecon_version = SYSRECON_VERSION;
+    sys_info.elevated = is_elevated_;
+    sys_info.stealth = stealth_mode_;
+    sys_info.modules = selection_.Names();
+    sys_info.config_path = config_loaded_ ? config_path_ : String(L"(built-in defaults)");
     report_generator_->SetSystemInfo(sys_info);
-    
+
+    {
+        // Checks that did not complete belong in the report, not only on a
+        // console that has scrolled away: a clean-looking report from a scan
+        // that could not read half the system is misleading.
+        std::lock_guard<std::mutex> err_lock(error_mutex_);
+        StringVector notes = error_messages_;
+        if (!is_elevated_) {
+            notes.insert(notes.begin(), L"Scan ran without Administrator privileges; many checks see only part of the system");
+        }
+        report_generator_->SetIncompleteChecks(notes);
+    }
+
     if (format == L"json") {
         return report_generator_->GenerateJSON(filename);
     } else if (format == L"csv") {
         return report_generator_->GenerateCSV(filename);
     } else if (format == L"html") {
         return report_generator_->GenerateHTML(filename);
-    } else if (format == L"all") {
-        // Generate all formats
-        String base_name = filename.substr(0, filename.find_last_of(L'.'));
-        bool success = true;
-        success &= report_generator_->GenerateJSON(base_name + L".json");
-        success &= report_generator_->GenerateCSV(base_name + L".csv");
-        success &= report_generator_->GenerateHTML(base_name + L".html");
-        return success;
-    } else {
-        SYSRECON_LOG_ERROR(L"Unsupported format: " + format);
-        return false;
     }
+    SYSRECON_LOG_ERROR(L"Unsupported format: " + format);
+    return false;
 }
 
 bool ScanEngine::CheckPrivileges() {
@@ -472,83 +473,36 @@ bool ScanEngine::CheckPrivileges() {
 
 bool ScanEngine::InitializeModules() {
     SYSRECON_LOG_DEBUG(L"Initializing scan modules");
-    
+
+    // Construct exactly the selected set. Stale objects from a previous
+    // interactive run would otherwise keep contributing to reports.
+    DestroyModules();
+
     bool all_success = true;
-    
-    if (IsModuleEnabled(ModuleType::Accounts)) {
-        user_enum_ = std::make_unique<Modules::UserEnumerator>();
-        if (!user_enum_->Initialize()) {
-            SYSRECON_LOG_ERROR(L"Failed to initialize user enumeration module");
+    auto init = [&](auto& ptr, const wchar_t* label) {
+        if (!ptr->Initialize()) {
+            SYSRECON_LOG_ERROR(String(L"Failed to initialize ") + label + L" module");
+            AddError(String(label) + L": module failed to initialize");
             all_success = false;
-        } else {
-            SYSRECON_LOG_DEBUG(L"User enumeration module initialized");
+            ptr.reset();
         }
-    }
-    
-    if (IsModuleEnabled(ModuleType::Services)) {
-        service_enum_ = std::make_unique<Modules::ServiceEnumerator>();
-        if (!service_enum_->Initialize()) {
-            SYSRECON_LOG_ERROR(L"Failed to initialize service enumeration module");
-            all_success = false;
-        } else {
-            SYSRECON_LOG_DEBUG(L"Service enumeration module initialized");
-        }
-    }
-    
-    if (IsModuleEnabled(ModuleType::Processes)) {
-        process_enum_ = std::make_unique<Modules::ProcessEnumerator>();
-        if (!process_enum_->Initialize()) {
-            SYSRECON_LOG_ERROR(L"Failed to initialize process enumeration module");
-            all_success = false;
-        } else {
-            SYSRECON_LOG_DEBUG(L"Process enumeration module initialized");
-        }
-    }
-    
-    if (IsModuleEnabled(ModuleType::Network)) {
-        network_enum_ = std::make_unique<Modules::NetworkEnumerator>();
-        if (!network_enum_->Initialize()) {
-            SYSRECON_LOG_ERROR(L"Failed to initialize network enumeration module");
-            all_success = false;
-        } else {
-            SYSRECON_LOG_DEBUG(L"Network enumeration module initialized");
-        }
-    }
-    
-    if (IsModuleEnabled(ModuleType::Registry)) {
-        registry_analyzer_ = std::make_unique<Modules::RegistryAnalyzer>();
-        if (!registry_analyzer_->Initialize()) {
-            SYSRECON_LOG_ERROR(L"Failed to initialize registry analyzer module");
-            all_success = false;
-        } else {
-            SYSRECON_LOG_DEBUG(L"Registry analyzer module initialized");
-        }
-    }
-    
-    if (IsModuleEnabled(ModuleType::Memory)) {
-        memory_analyzer_ = std::make_unique<Modules::MemoryAnalyzer>();
-        if (!memory_analyzer_->Initialize()) {
-            SYSRECON_LOG_ERROR(L"Failed to initialize memory analyzer module");
-            all_success = false;
-        } else {
-            SYSRECON_LOG_DEBUG(L"Memory analyzer module initialized");
-        }
-    }
-    
-    // Always initialize report generator
+    };
+
+    if (selection_.accounts)  { user_enum_ = std::make_unique<Modules::UserEnumerator>();          init(user_enum_, L"Accounts"); }
+    if (selection_.services)  { service_enum_ = std::make_unique<Modules::ServiceEnumerator>();    init(service_enum_, L"Services"); }
+    if (selection_.processes) { process_enum_ = std::make_unique<Modules::ProcessEnumerator>();    init(process_enum_, L"Processes"); }
+    if (selection_.network)   { network_enum_ = std::make_unique<Modules::NetworkEnumerator>();    init(network_enum_, L"Network"); }
+    if (selection_.registry)  { registry_analyzer_ = std::make_unique<Modules::RegistryAnalyzer>(); init(registry_analyzer_, L"Registry"); }
+    if (selection_.memory)    { memory_analyzer_ = std::make_unique<Modules::MemoryAnalyzer>();    init(memory_analyzer_, L"Memory"); }
+
     report_generator_ = std::make_unique<Modules::ReportGenerator>();
-    SYSRECON_LOG_DEBUG(L"Report generator initialized");
-    
     return all_success;
 }
 
 void ScanEngine::UpdateProgress(float progress, const String& module) {
     progress_.store(progress);
     current_module_ = module;
-    
-    if (verbose_mode_) {
-        SYSRECON_LOG_DEBUG(L"Progress: " + std::to_wstring(static_cast<int>(progress)) + L"% - " + module);
-    }
+    SYSRECON_LOG_DEBUG(L"Progress: " + std::to_wstring(static_cast<int>(progress)) + L"% - " + module);
 }
 
 void ScanEngine::AddError(const String& error) {

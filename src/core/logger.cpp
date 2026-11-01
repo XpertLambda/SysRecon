@@ -1,4 +1,5 @@
 #include "../../include/core/logger.h"
+#include "../../include/core/utils.h"
 #include <iostream>
 #include <iomanip>
 #include <sstream>
@@ -107,6 +108,18 @@ bool Logger::IsEnabled(LogLevel level) const {
     return level >= min_log_level_;
 }
 
+LogLevel Logger::GetLogLevel() const {
+    return min_log_level_;
+}
+
+void Logger::CloseLogFile() {
+    std::lock_guard<std::mutex> lock(log_mutex_);
+    if (log_file_.is_open()) {
+        log_file_.close();
+    }
+    file_output_ = false;
+}
+
 size_t Logger::GetLogCount(LogLevel level) const {
     // log_counts_ is written by Log() under this mutex; reading it unlocked
     // was a data race.
@@ -148,10 +161,10 @@ String Logger::GetTimestamp() {
     
     std::tm tm_buf{};
     // std::localtime returns a pointer to a shared static tm.
-    localtime_s(&tm_buf, &time_t);
+    Utils::ToLocalTime(time_t, tm_buf);
 
     std::wstringstream ss;
-    ss << std::put_time(&tm_buf, L"%Y-%m-%d %H:%M:%S");
+    ss << std::put_time(&tm_buf, timestamp_format_.c_str());
     return ss.str();
 }
 

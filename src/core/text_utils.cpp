@@ -210,6 +210,45 @@ bool IsPrivateIpv4(const WString& text) {
     return false;
 }
 
+bool IsLoopbackIpv4(const WString& text) {
+    uint32_t ip = 0;
+    return TryParseIpv4(text, ip) && ((ip >> 24) & 0xFF) == 127;
+}
+
+WString RegistryBufferToString(const wchar_t* data, size_t byte_count) {
+    if (data == nullptr) {
+        return WString();
+    }
+    // An odd trailing byte cannot form a character; ignore it.
+    const size_t chars = byte_count / sizeof(wchar_t);
+    size_t len = 0;
+    while (len < chars && data[len] != L'\0') {
+        ++len;
+    }
+    return WString(data, len);
+}
+
+WString SanitizeFileName(const WString& name) {
+    WString out;
+    out.reserve(name.size());
+    for (wchar_t c : name) {
+        const bool safe = (c >= L'a' && c <= L'z') || (c >= L'A' && c <= L'Z') ||
+                          (c >= L'0' && c <= L'9') || c == L'.' || c == L'_' || c == L'-';
+        out += safe ? c : L'_';
+        if (out.size() >= 64) {
+            break;
+        }
+    }
+    // "." / ".." and hidden-file names must not survive as a path component.
+    for (auto& c : out) {
+        if (c != L'.') {
+            break;
+        }
+        c = L'_';
+    }
+    return out.empty() ? WString(L"unnamed") : out;
+}
+
 }
 }
 }

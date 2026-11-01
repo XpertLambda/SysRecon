@@ -56,6 +56,10 @@ configure_file(
 # ---------------------------------------------------------------------------
 add_library(sysrecon_core STATIC
     src/core/text_utils.cpp
+    src/core/utils_common.cpp
+    src/core/logger.cpp
+    src/core/config.cpp
+    src/core/scan_plan.cpp
 )
 target_include_directories(sysrecon_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -69,8 +73,6 @@ target_include_directories(sysrecon_core PUBLIC
 set(SOURCES
     src/main.cpp
     src/core/engine.cpp
-    src/core/logger.cpp
-    src/core/config.cpp
     src/core/utils.cpp
     modules/accounts/user_enum.cpp
     modules/services/service_enum.cpp
@@ -88,6 +90,7 @@ set(HEADERS
     include/core/config.h
     include/core/utils.h
     include/core/text_utils.h
+    include/core/scan_plan.h
     include/core/whitelist.h
     include/modules/accounts/user_enum.h
     include/modules/services/service_enum.h
@@ -140,14 +143,18 @@ if(SYSRECON_BUILD_TESTS AND NOT CMAKE_CROSSCOMPILING)
         FetchContent_MakeAvailable(googletest)
     endif()
 
-    # tests/test_core.cpp is NOT built here yet: it exercises Utils and Logger,
-    # which are still Win32-coupled and live in the sysrecon exe target. It is
-    # wired up once those are split into sysrecon_core (see TESTING.md).
     add_executable(sysrecon_tests
+        tests/test_core.cpp
         tests/test_whitelist.cpp
         tests/test_report_escaping.cpp
+        tests/test_text_utils.cpp
+        tests/test_scan_plan.cpp
+        tests/test_config.cpp
     )
     target_link_libraries(sysrecon_tests PRIVATE sysrecon_core GTest::gtest_main)
+    # Lets tests validate the config.json that actually ships.
+    target_compile_definitions(sysrecon_tests PRIVATE
+        SYSRECON_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 
     include(GoogleTest)
     gtest_discover_tests(sysrecon_tests)
