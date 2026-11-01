@@ -106,6 +106,58 @@ function Invoke-Hardening([string]$Name, [string]$Arguments) {
     return $counts
 }
 
+# Settings the hardening changes, read directly. Rollback must restore every
+# one of them exactly -- including values in Lsa, Terminal Server and
+# Winlogon, whose whole-key .reg exports could not be re-imported.
+function Get-StateSnapshot {
+    $values = @(
+        @('HKLM:\SYSTEM\CurrentControlSet\Control\Lsa', 'LimitBlankPasswordUse'),
+        @('HKLM:\SYSTEM\CurrentControlSet\Control\Lsa', 'RunAsPPL'),
+        @('HKLM:\SYSTEM\CurrentControlSet\Control\Lsa', 'SCENoApplyLegacyAuditPolicy'),
+        @('HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp', 'UserAuthentication'),
+        @('HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp', 'MinEncryptionLevel'),
+        @('HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon', 'CachedLogonsCount'),
+        @('HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient', 'EnableMulticast'),
+        @('HKLM:\SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Parameters', 'RequireSecuritySignature'),
+        @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System', 'InactivityTimeoutSecs'),
+        @('HKLM:\SOFTWARE\Policies\Microsoft\Windows\EventLog\Security', 'MaxSize')
+    )
+    $snap = [ordered]@{}
+    foreach ($v in $values) {
+        $value = $null
+        $kind = ''
+        $key = Get-Item -LiteralPath $v[0] -ErrorAction SilentlyContinue
+        if ($key -and (@($key.GetValueNames()) -contains $v[1])) {
+            $value = $key.GetValue($v[1])
+            $kind = $key.GetValueKind($v[1])
+        }
+        $snap["$($v[0])\$($v[1])"] = if ($null -eq $value) { '<absent>' } else { "$value ($kind)" }
+    }
+    try {
+        $smb = Get-SmbServerConfiguration -ErrorAction Stop
+        $snap['SMB server RequireSecuritySignature'] = "$($smb.RequireSecuritySignature)"
+        $snap['SMB server EnableSMB1Protocol'] = "$($smb.EnableSMB1Protocol)"
+    } catch { $snap['SMB server'] = '<unavailable>' }
+    try {
+        $g = Get-LocalUser -Name 'Guest' -ErrorAction Stop
+        $snap['Guest enabled'] = "$($g.Enabled)"
+    } catch { $snap['Guest enabled'] = '<none>' }
+    try {
+        $mp = Get-MpPreference -ErrorAction Stop
+        $snap['Defender PUAProtection'] = "$($mp.PUAProtection)"
+        $snap['Defender ASR rules'] = (@($mp.AttackSurfaceReductionRules_Ids | Where-Object { $_ }) | Sort-Object) -join ','
+    } catch { $snap['Defender'] = '<unavailable>' }
+    return $snap
+}
+
+function Compare-Snapshot($Expected, $Actual, [string]$What) {
+    $diffs = @(foreach ($k in $Expected.Keys) {
+        if ("$($Expected[$k])" -ne "$($Actual[$k])") { "$k : expected '$($Expected[$k])', got '$($Actual[$k])'" }
+    })
+    Assert-True ($diffs.Count -eq 0) "$What ($($diffs.Count) setting(s) differ)"
+    foreach ($d in $diffs) { Write-Annotation warning "$What -- $d" }
+}
+
 function Get-NewestBundle {
     Get-ChildItem -LiteralPath $Bundles -Directory -ErrorAction SilentlyContinue |
         Sort-Object Name -Descending | Select-Object -First 1
@@ -123,6 +175,8 @@ function Compare-Findings([string[]]$Expected, [string[]]$Actual, [string]$What)
 # ---------------------------------------------------------------------------
 Write-Step '1. Baseline audit'
 $before = Invoke-Audit 'audit-before'
+$stateBefore = Get-StateSnapshot
+$stateBefore.GetEnumerator() | ForEach-Object { Write-Host "    state: $($_.Key) = $($_.Value)" }
 Assert-True ($before.Count -gt 0) 'baseline host has policy findings to remediate (test is meaningful)'
 
 Write-Step '2. Preview changes nothing'
@@ -151,6 +205,10 @@ if ($bundle) {
     }
 }
 
+$stateAfterApply = Get-StateSnapshot
+$changedKeys = @($stateBefore.Keys | Where-Object { "$($stateBefore[$_])" -ne "$($stateAfterApply[$_])" })
+Assert-True ($changedKeys.Count -gt 0) "apply changed tracked settings ($($changedKeys.Count) of $($stateBefore.Count))"
+
 Write-Step '4. Re-audit: remediated findings are gone'
 $afterApply = Invoke-Audit 'audit-after-apply'
 Assert-True ($afterApply.Count -eq 0) "re-audit: no account-policy or firewall findings remain ($($afterApply.Count) left)"
@@ -176,6 +234,8 @@ if ($bundle) {
     Assert-True ($rb -eq 0) "rollback exits 0 (got $rb)"
     $afterRollback = Invoke-Audit 'audit-after-rollback'
     Compare-Findings $before $afterRollback 'rollback restored the original findings'
+    Compare-Snapshot $stateBefore (Get-StateSnapshot) 'rollback restored every tracked setting exactly'
+    Assert-True (Test-Path -LiteralPath (Join-Path $bundle.FullName 'changes.json')) 'bundle contains the changes.json undo journal'
 }
 
 Complete-Test

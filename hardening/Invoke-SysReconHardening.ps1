@@ -123,6 +123,11 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 $script:PreviewOnly = (-not $Apply) -or $WhatIfPreference
 $script:Results = [System.Collections.Generic.List[object]]::new()
+# Undo journal: one record per change actually made, with the previous value,
+# written to <bundle>\changes.json as changes happen. Rollback replays it in
+# reverse. (Whole-key .reg exports could not be re-imported: Lsa, Terminal
+# Server and Winlogon contain subkeys even Administrators cannot write.)
+$script:Changes = [System.Collections.Generic.List[object]]::new()
 $script:BundleDir = $null
 $script:RebootRequired = $false
 $script:Os = $null
@@ -198,6 +203,18 @@ function Register-Result {
 }
 
 # ---------------------------------------------------------------------------
+# Undo journal
+# ---------------------------------------------------------------------------
+function Add-UndoRecord([hashtable]$Record) {
+    $script:Changes.Add([pscustomobject]$Record)
+    if ($script:BundleDir) {
+        # Rewritten after every change so an interrupted run is still reversible.
+        ConvertTo-Json -InputObject @($script:Changes) -Depth 5 |
+            Set-Content -Path (Join-Path $script:BundleDir 'changes.json') -Encoding UTF8
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Native commands
 # ---------------------------------------------------------------------------
 function Invoke-Native {
@@ -269,10 +286,27 @@ function Set-RegistryValue {
             Register-Result $Control $Setting $current $Value 'WouldChange' $Cis $Risk
             return
         }
-        if (-not (Test-Path -LiteralPath $Path)) {
+        # Capture exactly what is about to be overwritten, for rollback.
+        $keyCreated = -not (Test-Path -LiteralPath $Path)
+        $existed = $false
+        $previousKind = $null
+        $previousValue = $null
+        if (-not $keyCreated) {
+            $key = Get-Item -LiteralPath $Path
+            if (@($key.GetValueNames()) -contains $Name) {
+                $existed = $true
+                $previousKind = $key.GetValueKind($Name).ToString()
+                $previousValue = $key.GetValue($Name, $null, 'DoNotExpandEnvironmentNames')
+            }
+        }
+        if ($keyCreated) {
             New-Item -Path $Path -Force | Out-Null
         }
         New-ItemProperty -LiteralPath $Path -Name $Name -PropertyType $Type -Value $Value -Force | Out-Null
+        Add-UndoRecord @{
+            Type = 'Registry'; Path = $Path; Name = $Name; KeyCreated = $keyCreated
+            Existed = $existed; Kind = $previousKind; Previous = $previousValue
+        }
         Register-Result $Control $Setting $current $Value 'Changed' $Cis $Risk
     }
     catch {
@@ -292,6 +326,8 @@ function Invoke-DriftAction {
         [Parameter(Mandatory)][scriptblock]$GetCurrent,
         [Parameter(Mandatory)]$Desired,
         [Parameter(Mandatory)][scriptblock]$Apply,
+        # Optional: builds the undo record from the pre-change value.
+        [scriptblock]$Undo,
         [string]$Cis = '', [string]$Risk = 'Low'
     )
     $current = $null
@@ -306,6 +342,7 @@ function Invoke-DriftAction {
             return
         }
         & $Apply
+        if ($Undo) { Add-UndoRecord (& $Undo $current) }
         Register-Result $Control $Setting $current $Desired 'Changed' $Cis $Risk
     }
     catch {
@@ -353,7 +390,8 @@ function New-BackupBundle {
         Write-HardenLog "System Restore point not created ($($_.Exception.Message)). Continuing; the bundle exports are the primary rollback." 'WARN'
     }
 
-    # Registry keys.
+    # Registry keys: whole-key exports, kept for manual recovery and for the
+    # record. Rollback uses the precise changes.json journal instead.
     $regDir = Join-Path $dir 'registry'
     New-Item -ItemType Directory -Path $regDir -Force | Out-Null
     $i = 0
@@ -413,11 +451,73 @@ function Invoke-Rollback {
         }
     }
 
-    $regDir = Join-Path $Path 'registry'
-    if (Test-Path $regDir) {
-        Get-ChildItem $regDir -Filter '*.reg' | ForEach-Object {
-            $file = $_.FullName
-            Invoke-RollbackStep "registry ($($_.Name))" { $null = Invoke-Native reg.exe @('import', $file) }
+    $journal = Join-Path $Path 'changes.json'
+    if (Test-Path -LiteralPath $journal) {
+        # Piping through ForEach-Object enumerates the array on both Windows
+        # PowerShell 5.1 (which emits a JSON array as one object) and 7.
+        $changes = @(Get-Content -Raw -LiteralPath $journal | ConvertFrom-Json | ForEach-Object { $_ })
+        [array]::Reverse($changes)
+        foreach ($c in $changes) {
+            switch ($c.Type) {
+                'Registry' {
+                    Invoke-RollbackStep "registry $($c.Path)\$($c.Name)" {
+                        if ($c.Existed) {
+                            $value = $c.Previous
+                            if ($c.Kind -eq 'Binary') { $value = [byte[]]@($c.Previous) }
+                            elseif ($c.Kind -eq 'MultiString') { $value = [string[]]@($c.Previous) }
+                            New-ItemProperty -LiteralPath $c.Path -Name $c.Name -PropertyType $c.Kind -Value $value -Force | Out-Null
+                        }
+                        else {
+                            Remove-ItemProperty -LiteralPath $c.Path -Name $c.Name -ErrorAction SilentlyContinue
+                            if ($c.KeyCreated) {
+                                $k = Get-Item -LiteralPath $c.Path -ErrorAction SilentlyContinue
+                                if ($k -and $k.ValueCount -eq 0 -and $k.SubKeyCount -eq 0) {
+                                    Remove-Item -LiteralPath $c.Path
+                                }
+                            }
+                        }
+                    }
+                }
+                'SmbServer' {
+                    Invoke-RollbackStep "SMB server $($c.Setting)" {
+                        $smbArgs = @{ $c.Setting = [bool]$c.Previous; Force = $true }
+                        Set-SmbServerConfiguration @smbArgs
+                    }
+                }
+                'LocalUser' {
+                    if ($c.WasEnabled) {
+                        Invoke-RollbackStep "account $($c.Name)" { Enable-LocalUser -Name $c.Name -ErrorAction Stop }
+                    }
+                }
+                'MpPreference' {
+                    Invoke-RollbackStep "Defender $($c.Setting)" {
+                        $mpArgs = @{ $c.Setting = $c.Previous }
+                        Set-MpPreference @mpArgs -ErrorAction Stop
+                    }
+                }
+                'AsrRule' {
+                    Invoke-RollbackStep "ASR rule $($c.Id)" {
+                        if ($null -eq $c.Previous) {
+                            Remove-MpPreference -AttackSurfaceReductionRules_Ids $c.Id -ErrorAction Stop
+                        }
+                        else {
+                            Add-MpPreference -AttackSurfaceReductionRules_Ids $c.Id -AttackSurfaceReductionRules_Actions ([int]$c.Previous) -ErrorAction Stop
+                        }
+                    }
+                }
+                default { Write-HardenLog "Unknown change type in journal: $($c.Type)" 'WARN' }
+            }
+        }
+    }
+    else {
+        # Bundle from an older version without a journal: fall back to the
+        # whole-key exports. Protected subkeys may refuse the import.
+        $regDir = Join-Path $Path 'registry'
+        if (Test-Path $regDir) {
+            Get-ChildItem $regDir -Filter '*.reg' | ForEach-Object {
+                $file = $_.FullName
+                Invoke-RollbackStep "registry ($($_.Name))" { $null = Invoke-Native reg.exe @('import', $file) }
+            }
         }
     }
     $sec = Join-Path $Path 'secpol-before.inf'
@@ -461,10 +561,12 @@ function Invoke-Control-Firewall {
 function Invoke-Control-SMB {
     Invoke-DriftAction -Control 'SMB' -Setting 'SMBv1 server protocol' -Cis '18.3.1' -Risk 'Low' `
         -GetCurrent { (Get-SmbServerConfiguration).EnableSMB1Protocol } -Desired 'False' `
-        -Apply { Set-SmbServerConfiguration -EnableSMB1Protocol $false -Force }
+        -Apply { Set-SmbServerConfiguration -EnableSMB1Protocol $false -Force } `
+        -Undo { param($prev) @{ Type = 'SmbServer'; Setting = 'EnableSMB1Protocol'; Previous = [bool]$prev } }
     Invoke-DriftAction -Control 'SMB' -Setting 'Require SMB signing (server)' -Cis '2.3.9.x' `
         -GetCurrent { (Get-SmbServerConfiguration).RequireSecuritySignature } -Desired 'True' `
-        -Apply { Set-SmbServerConfiguration -RequireSecuritySignature $true -Force }
+        -Apply { Set-SmbServerConfiguration -RequireSecuritySignature $true -Force } `
+        -Undo { param($prev) @{ Type = 'SmbServer'; Setting = 'RequireSecuritySignature'; Previous = [bool]$prev } }
     Set-RegistryValue -Control 'SMB' -Setting 'Require SMB signing (client)' -Cis '2.3.8.1' `
         -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Parameters' -Name 'RequireSecuritySignature' -Value 1
     Set-RegistryValue -Control 'SMB' -Setting 'Insecure guest logons' -Cis '18.5.x' `
@@ -622,7 +724,8 @@ function Invoke-Control-BuiltinAccounts {
         -GetCurrent {
             $g = Get-LocalUser -Name 'Guest' -ErrorAction SilentlyContinue
             if ($null -eq $g) { 'True' } else { (-not $g.Enabled).ToString() }
-        } -Desired 'True' -Apply { Disable-LocalUser -Name 'Guest' -ErrorAction SilentlyContinue }
+        } -Desired 'True' -Apply { Disable-LocalUser -Name 'Guest' -ErrorAction Stop } `
+        -Undo { param($prev) @{ Type = 'LocalUser'; Name = 'Guest'; WasEnabled = ("$prev" -eq 'False') } }
     # Deny blank-password use over the network.
     Set-RegistryValue -Control 'Accounts' -Setting 'Limit blank password use to console' -Cis '2.3.1.x' `
         -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name 'LimitBlankPasswordUse' -Value 1
@@ -636,16 +739,20 @@ function Invoke-Control-Defender {
     }
     Invoke-DriftAction -Control 'Defender' -Setting 'Real-time protection' -Cis '18.9.x' `
         -GetCurrent { (-not (Get-MpPreference).DisableRealtimeMonitoring).ToString() } -Desired 'True' `
-        -Apply { Set-MpPreference -DisableRealtimeMonitoring $false }
+        -Apply { Set-MpPreference -DisableRealtimeMonitoring $false } `
+        -Undo { param($prev) @{ Type = 'MpPreference'; Setting = 'DisableRealtimeMonitoring'; Previous = ("$prev" -eq 'False') } }
     Invoke-DriftAction -Control 'Defender' -Setting 'PUA protection' -Cis '18.9.x' `
         -GetCurrent { (Get-MpPreference).PUAProtection } -Desired '1' `
-        -Apply { Set-MpPreference -PUAProtection Enabled }
+        -Apply { Set-MpPreference -PUAProtection Enabled } `
+        -Undo { param($prev) @{ Type = 'MpPreference'; Setting = 'PUAProtection'; Previous = [int]$prev } }
     Invoke-DriftAction -Control 'Defender' -Setting 'Cloud-delivered protection (MAPS)' -Cis '18.9.x' `
         -GetCurrent { (Get-MpPreference).MAPSReporting } -Desired '2' `
-        -Apply { Set-MpPreference -MAPSReporting Advanced }
+        -Apply { Set-MpPreference -MAPSReporting Advanced } `
+        -Undo { param($prev) @{ Type = 'MpPreference'; Setting = 'MAPSReporting'; Previous = [int]$prev } }
     Invoke-DriftAction -Control 'Defender' -Setting 'Submit samples (safe)' -Cis '18.9.x' `
         -GetCurrent { (Get-MpPreference).SubmitSamplesConsent } -Desired '1' `
-        -Apply { Set-MpPreference -SubmitSamplesConsent SendSafeSamples }
+        -Apply { Set-MpPreference -SubmitSamplesConsent SendSafeSamples } `
+        -Undo { param($prev) @{ Type = 'MpPreference'; Setting = 'SubmitSamplesConsent'; Previous = [int]$prev } }
 
     # ASR rules -> Block, only for those not already enabled.
     $pref = Get-MpPreference
@@ -667,7 +774,9 @@ function Invoke-Control-Defender {
             continue
         }
         try {
+            $previousAction = if ($enabledIds.ContainsKey($id.ToLower())) { [int]$enabledIds[$id.ToLower()] } else { $null }
             Add-MpPreference -AttackSurfaceReductionRules_Ids $id -AttackSurfaceReductionRules_Actions Enabled -ErrorAction Stop
+            Add-UndoRecord @{ Type = 'AsrRule'; Id = $id; Previous = $previousAction }
             Register-Result 'Defender-ASR' $desc 'not-block' 'Block' 'Changed' '18.9.x' 'Medium'
         }
         catch {
@@ -702,10 +811,16 @@ function Invoke-Control-AuditPolicy {
     foreach ($x in $subs) {
         Invoke-DriftAction -Control 'Audit' -Setting $x.n -Cis $x.cis `
             -GetCurrent {
+                # /r CSV columns: Machine Name, Policy Target, Subcategory,
+                # Subcategory GUID, Inclusion Setting, Exclusion Setting. The
+                # setting is column 4; reading the last column (Exclusion,
+                # always empty) made every audit control look non-compliant
+                # and re-apply on every run.
                 $line = (Invoke-Native auditpol.exe @('/get', "/subcategory:$($x.n)", '/r') -AllowFailure |
-                        Select-String -Pattern ([regex]::Escape($x.n)))
-                if ($line) {
-                    $val = ($line.ToString() -split ',')[-1].Trim()
+                        Select-String -Pattern ([regex]::Escape($x.n)) | Select-Object -First 1)
+                $fields = if ($line) { @($line.ToString() -split ',') } else { @() }
+                if ($fields.Count -ge 5) {
+                    $val = $fields[4].Trim()
                     $sOn = $val -match 'Success'
                     $fOn = $val -match 'Failure'
                     (($sOn -ge $x.s) -and ($fOn -ge $x.f)).ToString()
@@ -724,9 +839,11 @@ function Invoke-Control-AuditPolicy {
     # Force audit-policy subcategory override.
     Set-RegistryValue -Control 'Audit' -Setting 'Force subcategory audit policy' -Cis '2.3.2.1' `
         -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name 'SCENoApplyLegacyAuditPolicy' -Value 1
-    # Grow the Security event log to 196 MB.
-    Set-RegistryValue -Control 'Audit' -Setting 'Security log max size (KB)' -Cis '17.1.x' `
-        -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\EventLog\Security' -Name 'MaxSize' -Value 201326592
+    # Grow the Security event log to 192 MB. This policy value is in KB
+    # (CIS: 196608 or greater); 201326592 -- 192 MB in *bytes* -- set a 192 GB
+    # limit.
+    Set-RegistryValue -Control 'Audit' -Setting 'Security log max size (KB)' -Cis '18.9.27.2.1' `
+        -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\EventLog\Security' -Name 'MaxSize' -Value 196608
 }
 
 function Invoke-Control-PowerShellLogging {

@@ -161,10 +161,23 @@ Entra / Intune instead of relying on the text file.
 
 Rollback restores from the bundle:
 
-- **Registry** — re-imports the `.reg` exports of every touched key.
-- **Local security policy** — re-applies `secpol-before.inf` via `secedit`.
+- **Every individual change**, from the `changes.json` undo journal: each
+  registry value the script wrote (its previous value and type, or deleted if
+  it did not exist), SMB server settings, the Guest account, Defender
+  preferences and ASR rules. The journal is written as changes happen, so an
+  interrupted run is still reversible.
+- **Local security policy** (password and lockout policy) — re-applies
+  `secpol-before.inf` via `secedit`.
 - **Audit policy** — `auditpol /restore`.
 - **Firewall** — `netsh advfirewall import`.
+
+The bundle also holds whole-key `.reg` exports of the touched registry areas
+for manual recovery. Rollback does not import them (some of those keys, e.g.
+`Lsa`, contain subkeys that even Administrators cannot write), except for
+bundles from older versions that have no `changes.json`.
+
+Rollback attempts every step and exits with code 1, listing what could not be
+restored, if any step fails.
 
 The **System Restore point** created at hardening time is the backstop for
 anything the bundle does not cover.
@@ -181,10 +194,17 @@ anything the bundle does not cover.
 
 ## Known limitations
 
-- **Not tested end-to-end by the author on Windows.** CI parses the script and
-  runs PSScriptAnalyzer (with `hardening/PSScriptAnalyzerSettings.psd1`) on a
-  Windows runner. There are no automated tests of its behaviour, and it has
-  **not** been run against a live Windows host by us. Validate
+- **Tested on Windows Server in CI, not yet on Windows 10/11 clients.** The
+  `hardening-test` CI job (`tests/windows/hardening-test.ps1`) runs the full
+  loop on a Windows Server runner: audit, preview (must change nothing),
+  `-Apply` (no control may fail), re-audit (SysRecon's account-policy and
+  firewall findings must be gone), a second `-Apply` (must change nothing), and
+  `-Rollback` (the findings and 15 tracked settings must return exactly). It
+  runs under Windows PowerShell 5.1. Validate on a client VM before production
+  use -- see the checklist below.
+- **English-language Windows only for account and audit policy**: those
+  controls parse the output of `net accounts` and `auditpol`, whose labels and
+  subcategory names are localised. Validate
   on a VM (fresh + used snapshots) before production use — see the checklist
   below. This is stated for the same reason the installer's uninstall path is
   flagged as VM-pending in the changelog: we do not claim verification we did

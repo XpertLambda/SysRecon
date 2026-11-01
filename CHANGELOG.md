@@ -25,6 +25,18 @@ All notable changes to SysRecon are documented here.
   All native tools now run through one helper that captures stderr and fails
   on a non-zero exit code. A backup failure aborts before any change; rollback
   attempts every step and exits non-zero if any could not be restored.
+- **Hardening rollback did not restore most changes.** It re-imported
+  whole-key `.reg` exports, which fails for `Lsa`, `Terminal Server` and
+  `Winlogon` (protected subkeys), and never restored SMB server settings, the
+  Guest account, Defender preferences or ASR rules at all. Every change is now
+  recorded with its previous value in a `changes.json` undo journal, and
+  rollback replays it exactly.
+- **Hardening audit-policy controls re-applied on every run**: they read the
+  "Exclusion Setting" column of `auditpol /r` (always empty) instead of
+  "Inclusion Setting", so a second `-Apply` was never a no-op.
+- **The Security event log size was set to 192 GB instead of 192 MB**: the
+  policy value is in KB, and 201326592 (192 MB in bytes) was written. Now
+  196608 KB, the CIS value.
 
 - **Every run with command-line arguments crashed on real Windows** (access
   violation, exit code `0xC0000005`), including `--help`. `main()` forwarded

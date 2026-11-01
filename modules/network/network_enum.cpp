@@ -252,18 +252,18 @@ bool NetworkEnumerator::EnumerateInterfaces() {
         return false;
     }
     
-    DWORD result = GetAdaptersInfo(adapter_info, &buffer_size);
-    if (result == ERROR_BUFFER_OVERFLOW) {
+    DWORD adapter_status = GetAdaptersInfo(adapter_info, &buffer_size);
+    if (adapter_status == ERROR_BUFFER_OVERFLOW) {
         free(adapter_info);
         adapter_info = (IP_ADAPTER_INFO*)malloc(buffer_size);
         if (adapter_info == NULL) {
             return false;
         }
-        result = GetAdaptersInfo(adapter_info, &buffer_size);
+        adapter_status = GetAdaptersInfo(adapter_info, &buffer_size);
     }
     
-    if (result != ERROR_SUCCESS) {
-        SYSRECON_LOG_ERROR(L"GetAdaptersInfo failed: " + std::to_wstring(result));
+    if (adapter_status != ERROR_SUCCESS) {
+        SYSRECON_LOG_ERROR(L"GetAdaptersInfo failed: " + std::to_wstring(adapter_status));
         free(adapter_info);
         return false;
     }
