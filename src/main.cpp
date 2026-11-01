@@ -970,6 +970,106 @@ int InteractiveMode() {
     }
 }
 
+// Writes std::wcout / std::wcerr straight to the Win32 handle.
+//
+// The default path (wide stream -> CRT -> locale-dependent wide-to-narrow
+// conversion) silently dropped *all* output on real Windows when stdout was
+// redirected to a file or pipe: the first character the CRT could not
+// convert -- the banner's box-drawing glyphs -- put the stream into a failed
+// state and every later write was discarded. Wine's CRT is more lenient, so
+// only the Windows CI job saw it. Writing explicitly removes the CRT locale
+// from the picture:
+//   * console handle      -> WriteConsoleW (native UTF-16, any character)
+//   * file / pipe handle  -> UTF-8 via WriteFile (what `> out.txt` expects)
+class Win32OutputBuf : public std::wstreambuf {
+public:
+    explicit Win32OutputBuf(DWORD std_handle) : std_handle_(std_handle) {
+        setp(buffer_, buffer_ + kSize);
+    }
+    ~Win32OutputBuf() override { Flush(); }
+
+protected:
+    int_type overflow(int_type ch) override {
+        if (!Flush()) {
+            return traits_type::eof();
+        }
+        if (!traits_type::eq_int_type(ch, traits_type::eof())) {
+            *pptr() = traits_type::to_char_type(ch);
+            pbump(1);
+        }
+        return traits_type::not_eof(ch);
+    }
+
+    int sync() override { return Flush() ? 0 : -1; }
+
+private:
+    static constexpr std::ptrdiff_t kSize = 1024;
+
+    bool Flush() {
+        std::wstring text(pending_);
+        pending_.clear();
+        text.append(pbase(), pptr());
+        setp(buffer_, buffer_ + kSize);
+        if (text.empty()) {
+            return true;
+        }
+        // Never split a surrogate pair across two writes.
+        const wchar_t last = text.back();
+        if (last >= 0xD800 && last <= 0xDBFF) {
+            pending_.assign(1, last);
+            text.pop_back();
+        }
+
+        HANDLE handle = GetStdHandle(std_handle_);
+        if (handle == NULL || handle == INVALID_HANDLE_VALUE) {
+            return true;  // No stream to write to (e.g. detached); not an error.
+        }
+        DWORD mode = 0;
+        if (GetConsoleMode(handle, &mode)) {
+            const wchar_t* data = text.data();
+            size_t remaining = text.size();
+            while (remaining > 0) {
+                const DWORD chunk = static_cast<DWORD>(std::min<size_t>(remaining, 8192));
+                DWORD written = 0;
+                if (!WriteConsoleW(handle, data, chunk, &written, nullptr) || written == 0) {
+                    return false;
+                }
+                data += written;
+                remaining -= written;
+            }
+            return true;
+        }
+        // Files and pipes get CRLF line endings, as the CRT's text mode did.
+        std::wstring crlf;
+        crlf.reserve(text.size() + text.size() / 32);
+        for (wchar_t c : text) {
+            if (c == L'\n' && !last_was_cr_) {
+                crlf += L'\r';
+            }
+            crlf += c;
+            last_was_cr_ = (c == L'\r');
+        }
+        const std::string utf8 = Core::Utils::WideToUtf8(crlf);
+        const char* data = utf8.data();
+        size_t remaining = utf8.size();
+        while (remaining > 0) {
+            const DWORD chunk = static_cast<DWORD>(std::min<size_t>(remaining, 1 << 20));
+            DWORD written = 0;
+            if (!WriteFile(handle, data, chunk, &written, nullptr) || written == 0) {
+                return false;
+            }
+            data += written;
+            remaining -= written;
+        }
+        return true;
+    }
+
+    DWORD std_handle_;
+    bool last_was_cr_ = false;
+    wchar_t buffer_[kSize];
+    std::wstring pending_;
+};
+
 // Entry point. MinGW builds use -municode (CMakeLists.txt) so the CRT calls
 // wmain with real wide arguments; MSVC does so natively. The previous
 // `int main() { return wmain(__argc, __wargv); }` shim crashed on every
@@ -1018,8 +1118,15 @@ int wmain(int argc, wchar_t* argv[]) {
         // Set locale for proper wide character output
         setlocale(LC_ALL, ".UTF8");
         
-        // Sync C++ streams with C streams
-        std::ios::sync_with_stdio(true);
+        // Route wide output through Win32OutputBuf (see its comment). Static:
+        // the buffers must outlive every use of the streams, including the
+        // logger writing during static destruction.
+        static Win32OutputBuf out_buf(STD_OUTPUT_HANDLE);
+        static Win32OutputBuf err_buf(STD_ERROR_HANDLE);
+        std::wcout.rdbuf(&out_buf);
+        std::wcerr.rdbuf(&err_buf);
+        std::wcout.clear();
+        std::wcerr.clear();
         
         // If no arguments provided, launch interactive menu
         if (argc == 1) {

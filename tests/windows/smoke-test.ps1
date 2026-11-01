@@ -206,6 +206,9 @@ Write-Step 'Default scan from another directory (config found next to the exe)'
 Get-ChildItem -LiteralPath $ReportsDir -Filter 'scan_*' -ErrorAction SilentlyContinue | Remove-Item -Force
 $code = Invoke-Timed -File $Exe -Arguments '-f json' -TimeoutSec 900 -Name 'scan-default' -WorkingDirectory $OutDir
 Assert-True ($code -eq 0) "default scan exits 0 (got $code)"
+$scanOut = Get-Output 'scan-default'
+Assert-True ($null -ne $scanOut -and $scanOut.Contains('[SUMMARY]')) 'scan console output captured when redirected'
+Assert-True ($null -ne $scanOut -and $scanOut.Contains([string][char]0x2550)) 'non-ASCII banner characters survive redirection as UTF-8'
 $json = Get-ChildItem -LiteralPath $ReportsDir -Filter 'scan_*.json' -ErrorAction SilentlyContinue | Select-Object -First 1
 Assert-True ($null -ne $json) 'report written to the install directory reports folder, not the working directory'
 if ($json) {

@@ -12,6 +12,13 @@ All notable changes to SysRecon are documented here.
   initialises the narrow `argv`, so `__wargv` was NULL. Wine initialises both,
   which is why every wine test passed. MinGW builds now use `-municode` and
   the CRT calls `wmain` directly. Found by the new Windows end-to-end CI job.
+- **All console output was lost on real Windows when redirected** to a file or
+  pipe (`sysrecon.exe --help > out.txt` gave an empty file). The CRT's
+  locale-dependent wide-to-narrow conversion rejected the banner's box-drawing
+  characters and the stream silently discarded everything after them. Output
+  now goes straight to the handle: `WriteConsoleW` for a console, UTF-8 with
+  CRLF line endings for files and pipes. Wine's CRT is more lenient, so only
+  the Windows CI job caught this.
 
 - **A module disabled in `config.json` could not be enabled from the command
   line.** Modules were constructed from the config selection *before* the
