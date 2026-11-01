@@ -94,6 +94,29 @@ String GetComputerName() {
     return L"Unknown";
 }
 
+bool RestrictToAdministrators(const String& path) {
+    // P = protected (no inheritance from the parent); FA = file all access;
+    // SY = LocalSystem, BA = BUILTIN\Administrators, OW = owner rights.
+    PSECURITY_DESCRIPTOR sd = nullptr;
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            L"D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;OW)", SDDL_REVISION_1, &sd, nullptr)) {
+        return false;
+    }
+    BOOL present = FALSE;
+    BOOL defaulted = FALSE;
+    PACL dacl = nullptr;
+    bool ok = false;
+    if (GetSecurityDescriptorDacl(sd, &present, &dacl, &defaulted) && present && dacl) {
+        std::vector<wchar_t> buffer(path.begin(), path.end());
+        buffer.push_back(L'\0');
+        ok = SetNamedSecurityInfoW(buffer.data(), SE_FILE_OBJECT,
+                                   DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                                   nullptr, nullptr, dacl, nullptr) == ERROR_SUCCESS;
+    }
+    LocalFree(sd);
+    return ok;
+}
+
 String GetCurrentUserName() {
     wchar_t buffer[257];
     DWORD size = sizeof(buffer) / sizeof(buffer[0]);

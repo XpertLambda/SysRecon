@@ -90,6 +90,26 @@ VIAddVersionKey "FileVersion" "${PRODUCT_VERSION}"
 !define MUI_STARTMENUPAGE_REGISTRY_VALUENAME "${PRODUCT_STARTMENU_REGVAL}"
 
 ;--------------------------------
+; Macros
+
+; Marks a shortcut "Run as administrator" (SLDF_RUNAS_USER, bit 0x20 of the
+; LinkFlags byte at offset 0x15 of the .lnk). The shortcut descriptions always
+; said "Run as Administrator" but nothing requested elevation, so a scan
+; launched from the Start Menu aborted on require_admin.
+!macro SetShortcutRunAsAdmin LNK
+  ClearErrors
+  FileOpen $9 "${LNK}" a
+  ${IfNot} ${Errors}
+    FileSeek $9 0x15 SET
+    FileReadByte $9 $8
+    IntOp $8 $8 | 0x20
+    FileSeek $9 0x15 SET
+    FileWriteByte $9 $8
+    FileClose $9
+  ${EndIf}
+!macroend
+
+;--------------------------------
 ; Variables
 
 Var StartMenuFolder
@@ -212,12 +232,14 @@ Section "Start Menu Shortcuts" SecStartMenu
   
   ; Main application shortcut (run as admin)
   CreateShortcut "$SMPROGRAMS\$StartMenuFolder\${PRODUCT_NAME}.lnk" "$INSTDIR\sysrecon.exe" "" "$INSTDIR\sysrecon.exe" 0 SW_SHOWNORMAL "" "Windows Security Audit Tool (Run as Administrator)"
+  !insertmacro SetShortcutRunAsAdmin "$SMPROGRAMS\$StartMenuFolder\${PRODUCT_NAME}.lnk"
   
   ; Help shortcut
   CreateShortcut "$SMPROGRAMS\$StartMenuFolder\${PRODUCT_NAME} Help.lnk" "$INSTDIR\sysrecon.exe" "--help" "$INSTDIR\sysrecon.exe" 0 SW_SHOWNORMAL "" "View SysRecon Help"
   
   ; Quick Scan shortcut
-  CreateShortcut "$SMPROGRAMS\$StartMenuFolder\Quick Scan.lnk" "$INSTDIR\sysrecon.exe" "--quick" "$INSTDIR\sysrecon.exe" 0 SW_SHOWNORMAL "" "Run Quick Security Scan"
+  CreateShortcut "$SMPROGRAMS\$StartMenuFolder\Quick Scan.lnk" "$INSTDIR\sysrecon.exe" "--quick" "$INSTDIR\sysrecon.exe" 0 SW_SHOWNORMAL "" "Run Quick Security Scan (Run as Administrator)"
+  !insertmacro SetShortcutRunAsAdmin "$SMPROGRAMS\$StartMenuFolder\Quick Scan.lnk"
   
   ; Documentation shortcuts
   CreateShortcut "$SMPROGRAMS\$StartMenuFolder\README.lnk" "$INSTDIR\README.txt"
@@ -231,6 +253,7 @@ SectionEnd
 
 Section "Desktop Shortcut" SecDesktop
   CreateShortcut "$DESKTOP\${PRODUCT_NAME}.lnk" "$INSTDIR\sysrecon.exe" "" "$INSTDIR\sysrecon.exe" 0 SW_SHOWNORMAL "" "Windows Security Audit Tool (Run as Administrator)"
+  !insertmacro SetShortcutRunAsAdmin "$DESKTOP\${PRODUCT_NAME}.lnk"
 SectionEnd
 
 Section /o "Add to PATH" SecPath

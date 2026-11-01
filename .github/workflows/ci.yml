@@ -54,6 +54,18 @@ jobs:
       - name: Verify artifact
         run: test -f build/sysrecon.exe
 
+      - name: Verify DEP and ASLR are enabled
+        run: |
+          # README states these; keep the claim true. DllCharacteristics bits:
+          # 0x40 DYNAMIC_BASE (ASLR), 0x20 HIGH_ENTROPY_VA, 0x100 NX_COMPAT (DEP).
+          flags=$(x86_64-w64-mingw32-objdump -p build/sysrecon.exe | awk '/DllCharacteristics/ {print $2}')
+          echo "DllCharacteristics: 0x$flags"
+          for bit in 40 20 100; do
+            if (( (16#$flags & 16#$bit) == 0 )); then
+              echo "::error::sysrecon.exe is missing DllCharacteristics bit 0x$bit"; exit 1
+            fi
+          done
+
       - uses: actions/upload-artifact@v6
         with:
           name: sysrecon-exe
@@ -148,9 +160,15 @@ jobs:
           if ($results | Where-Object Severity -in 'Error','Warning') { exit 1 }
 
   windows-test:
-    name: End-to-end test on Windows (installer + scan)
-    runs-on: windows-latest
+    name: End-to-end test on ${{ matrix.os }} (installer + scan)
+    runs-on: ${{ matrix.os }}
     needs: installer
+    strategy:
+      fail-fast: false
+      matrix:
+        # windows-latest: Windows Server. windows-11-arm: Windows 11 client,
+        # where the x64 binary runs under Windows' built-in x64 emulation.
+        os: [windows-latest, windows-11-arm]
     steps:
       - uses: actions/checkout@v5
 
@@ -170,6 +188,75 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: windows-test-output
+          name: windows-test-output-${{ matrix.os }}
           path: ${{ runner.temp }}/sysrecon-smoke
           if-no-files-found: ignore
+
+  hardening-test:
+    name: Hardening loop on Windows (audit, apply, re-audit, rollback)
+    runs-on: windows-latest
+    needs: cross-compile
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: sysrecon-exe
+          path: dist
+
+      - name: Audit, harden, re-audit, re-apply, roll back
+        shell: pwsh
+        run: |
+          Copy-Item config.json dist/
+          ./tests/windows/hardening-test.ps1 -SysRecon dist/sysrecon.exe -OutDir "$env:RUNNER_TEMP/sysrecon-hardening"
+
+      - name: Upload logs, reports and backup bundles
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: hardening-test-output
+          path: ${{ runner.temp }}/sysrecon-hardening
+          if-no-files-found: ignore
+
+  msvc-build:
+    name: MSVC build and unit tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Configure
+        shell: pwsh
+        run: cmake -S . -B build-msvc -A x64 -DSYSRECON_BUILD_TESTS=ON
+
+      - name: Build
+        shell: pwsh
+        run: |
+          cmake --build build-msvc --config Release --parallel 2>&1 | Tee-Object build.log
+          $code = $LASTEXITCODE
+          # MSVC diagnostics are not annotated by default; surface them.
+          Select-String -Path build.log -Pattern ':\s+(fatal )?error [A-Z]+\d+' |
+            Select-Object -First 10 | ForEach-Object { Write-Host "::error::$($_.Line.Trim())" }
+          $warnings = @(Select-String -Path build.log -Pattern ':\s+warning [A-Z]+\d+')
+          if ($warnings.Count -gt 0) {
+            Write-Host "::warning::MSVC reported $($warnings.Count) warning(s); first: $($warnings[0].Line.Trim())"
+          }
+          exit $code
+
+      - name: Unit tests
+        shell: pwsh
+        working-directory: build-msvc
+        run: |
+          ctest -C Release --output-on-failure 2>&1 | Tee-Object ctest.log
+          $code = $LASTEXITCODE
+          Select-String -Path ctest.log -Pattern '\*\*\*Failed|\(Failed\)|Exception' |
+            Select-Object -First 10 | ForEach-Object { Write-Host "::error::$($_.Line.Trim())" }
+          exit $code
+
+      - name: Smoke-run the MSVC binary
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem build-msvc -Recurse -Filter sysrecon.exe | Select-Object -First 1
+          & $exe.FullName --help > help.txt
+          if ($LASTEXITCODE -ne 0 -or (Get-Item help.txt).Length -eq 0) {
+            Write-Host "::error::MSVC sysrecon.exe --help failed (exit $LASTEXITCODE)"; exit 1
+          }

@@ -93,6 +93,12 @@ String GetExecutableDirectory();
 String ExpandImagePath(const String& path);
 String GetCurrentUserName();
 String GetComputerName();
+// Replaces a file's DACL with a protected one granting full control only to
+// SYSTEM, BUILTIN\Administrators and the file's owner. Reports contain
+// usernames, SIDs, admin membership and service paths; inheriting the parent
+// folder's ACL (e.g. Users:Read under Program Files) exposed them to every
+// local user. Returns false if the ACL could not be applied.
+bool RestrictToAdministrators(const String& path);
 String GetWindowsVersion();
 bool IsWow64Process();
 

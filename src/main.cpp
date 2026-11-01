@@ -111,13 +111,21 @@ void PrintVersion() {
     std::wcout << L"Version:      " << SYSRECON_VERSION << L"\n";
     std::wcout << L"Build Date:   " << __DATE__ << L" " << __TIME__ << L"\n";
     std::wcout << L"Target:       Windows x64\n";
-    std::wcout << L"Compiler:     MinGW-w64 (C++20)\n";
+#if defined(_MSC_VER)
+    std::wcout << L"Compiler:     MSVC " << _MSC_VER << L" (C++20)\n";
+#elif defined(__MINGW32__)
+    std::wcout << L"Compiler:     MinGW-w64 GCC " << __GNUC__ << L"." << __GNUC_MINOR__ << L" (C++20)\n";
+#else
+    std::wcout << L"Compiler:     unknown (C++20)\n";
+#endif
     std::wcout << L"\n";
-    std::wcout << L"New in v1.1.0:\n";
-    std::wcout << L"  * Interactive menu mode for easy navigation\n";
-    std::wcout << L"  * Enhanced module selection interface\n";
-    std::wcout << L"  * Real-time configuration changes\n";
-    std::wcout << L"  * Improved user experience\n";
+    std::wcout << L"New in v" << SYSRECON_VERSION << L":\n";
+    std::wcout << L"  * Fixed: crash on every run with arguments, and lost redirected output,\n";
+    std::wcout << L"    on real Windows\n";
+    std::wcout << L"  * --memory and other module flags override config.json; --all added\n";
+    std::wcout << L"  * config.json found next to sysrecon.exe; every option now honoured\n";
+    std::wcout << L"  * Password/lockout policy, RID-based account and firewall-profile checks\n";
+    std::wcout << L"  * Reports record incomplete checks and are access-restricted\n";
     std::wcout << L"\n";
 }
 
@@ -131,6 +139,18 @@ bool StdHandleIsRedirected(DWORD std_handle) {
     DWORD mode = 0;
     // GetConsoleMode succeeds only for real console handles.
     return GetConsoleMode(handle, &mode) == 0;
+}
+
+// True when this process is alone on a console it did not inherit: launched
+// from a shortcut or Explorer, where the window closes the moment we exit and
+// the output (or error) can never be read. Never true from a terminal or with
+// redirected streams.
+bool OwnsConsoleWindow() {
+    DWORD pids[2] = {0, 0};
+    if (GetConsoleProcessList(pids, 2) != 1) {
+        return false;
+    }
+    return !StdHandleIsRedirected(STD_OUTPUT_HANDLE) && !StdHandleIsRedirected(STD_INPUT_HANDLE);
 }
 
 // Interactive menu functions
@@ -585,6 +605,9 @@ int RunScan(CommandLineOptions& options) {
     {
         const String log_path = output_dir + L"\\sysrecon.log";
         log.SetLogFile(log_path);
+        if (!Core::Utils::RestrictToAdministrators(log_path)) {
+            log.Warning(L"Could not restrict access to the log file: " + log_path);
+        }
         log.Info(L"Log file: " + log_path);
     }
 
@@ -656,6 +679,10 @@ int RunScan(CommandLineOptions& options) {
 
         if (engine.ExportResults(format, file_path)) {
             reports_generated++;
+            // Reports are sensitive; see RestrictToAdministrators.
+            if (!Core::Utils::RestrictToAdministrators(file_path)) {
+                log.Warning(L"Could not restrict access to report: " + file_path);
+            }
             if (!options.quiet) {
                 std::wcout << L"  [+] " << format << L" report: " << file_path << L"\n";
             }
@@ -1135,24 +1162,23 @@ int wmain(int argc, wchar_t* argv[]) {
         
         // Parse command-line arguments
         CommandLineOptions options;
-        
+        int rc = 0;
+
         if (!ParseArguments(argc, argv, options)) {
-            return 1;
-        }
-        
-        // Handle help and version
-        if (options.show_help) {
+            rc = 1;
+        } else if (options.show_help) {
             PrintHelp();
-            return 0;
-        }
-        
-        if (options.show_version) {
+        } else if (options.show_version) {
             PrintVersion();
-            return 0;
+        } else {
+            rc = RunScan(options);
         }
-        
-        // Run scan with command-line options
-        return RunScan(options);
+
+        // Launched from a shortcut (Quick Scan, Help): keep the window open.
+        if (OwnsConsoleWindow()) {
+            WaitForKey();
+        }
+        return rc;
         
     } catch (const std::exception& e) {
         std::wcerr << L"\n[ERROR] FATAL ERROR: " << e.what() << L"\n";

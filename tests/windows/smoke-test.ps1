@@ -40,85 +40,12 @@ $InstallDir = Join-Path $env:ProgramFiles 'SysRecon'
 $Exe = Join-Path $InstallDir 'sysrecon.exe'
 $ReportsDir = Join-Path $InstallDir 'reports'
 
-$script:Failures = [System.Collections.Generic.List[string]]::new()
-$script:LastName = $null
-
-# On GitHub Actions, failures are also emitted as workflow annotations: they
-# show on the run page and are readable through the public API, whereas the
-# raw job log needs an authenticated download.
-function Write-Annotation([ValidateSet('error', 'warning')][string]$Level, [string]$Message) {
-    if (-not $env:GITHUB_ACTIONS) { return }
-    $escaped = $Message.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
-    Write-Host "::$Level title=SysRecon Windows smoke test::$escaped"
-}
+$script:TestTitle = 'SysRecon Windows smoke test'
+. (Join-Path $PSScriptRoot 'common.ps1')
 
 trap {
     Write-Annotation error "Aborted: $($_.Exception.Message)"
     break
-}
-
-function Write-Step([string]$Title) {
-    Write-Host ''
-    Write-Host "=== $Title ===" -ForegroundColor Cyan
-}
-
-function Assert-True([bool]$Condition, [string]$What) {
-    if ($Condition) {
-        Write-Host "  [PASS] $What" -ForegroundColor Green
-    } else {
-        Write-Host "  [FAIL] $What" -ForegroundColor Red
-        $script:Failures.Add($What)
-        $context = if ($script:LastName) { Get-Tail $script:LastName } else { '' }
-        if ($context) { Write-Host ($context -replace '(?m)^', '         | ') }
-        Write-Annotation error ($(if ($context) { "$What`n--- last output of '$($script:LastName)' ---`n$context" } else { $What }))
-    }
-}
-
-# Runs a process with a hard timeout and returns its exit code. stdout and
-# stderr go to <OutDir>\<Name>.out.txt / .err.txt.
-function Invoke-Timed {
-    param(
-        [Parameter(Mandatory)][string]$File,
-        [string]$Arguments = '',
-        [int]$TimeoutSec = 300,
-        [string]$WorkingDirectory = $OutDir,
-        [Parameter(Mandatory)][string]$Name,
-        [string]$StdinFile
-    )
-    $start = @{
-        FilePath               = $File
-        WorkingDirectory       = $WorkingDirectory
-        PassThru               = $true
-        NoNewWindow            = $true
-        RedirectStandardOutput = (Join-Path $OutDir "$Name.out.txt")
-        RedirectStandardError  = (Join-Path $OutDir "$Name.err.txt")
-    }
-    if ($Arguments) { $start.ArgumentList = $Arguments }
-    if ($StdinFile) { $start.RedirectStandardInput = $StdinFile }
-
-    $p = Start-Process @start
-    $null = $p.Handle  # Caches the handle so ExitCode is available afterwards.
-    if (-not $p.WaitForExit($TimeoutSec * 1000)) {
-        $p.Kill($true)
-        throw "$Name did not finish within $TimeoutSec s (hung)"
-    }
-    $p.WaitForExit()
-    $script:LastName = $Name
-    return $p.ExitCode
-}
-
-# Last lines of a step's stdout+stderr, for failure messages.
-function Get-Tail([string]$Name, [int]$Lines = 8) {
-    $text = @()
-    foreach ($ext in 'out', 'err') {
-        $f = Join-Path $OutDir "$Name.$ext.txt"
-        if (Test-Path -LiteralPath $f) { $text += Get-Content -LiteralPath $f -Tail $Lines }
-    }
-    return ($text | Where-Object { $_ -and $_.Trim() }) -join "`n"
-}
-
-function Get-Output([string]$Name) {
-    Get-Content -Raw -LiteralPath (Join-Path $OutDir "$Name.out.txt") -ErrorAction SilentlyContinue
 }
 
 # The installer is a 32-bit process without SetRegView, so its keys live in
@@ -196,6 +123,24 @@ Assert-True ((Get-Reg32 'Software\SysRecon' 'AddedToPath') -eq 1) 'AddedToPath r
 Assert-True (Test-Reg32Key 'Software\Microsoft\Windows\CurrentVersion\Uninstall\SysRecon') 'uninstall entry registered'
 Assert-True (Test-MachinePathContains $InstallDir) 'install directory added to machine PATH'
 
+# Shortcuts: scan shortcuts must request elevation (SLDF_RUNAS_USER, bit 0x20
+# of byte 0x15); --help does not need it.
+function Test-RunAsShortcut([string]$Path) {
+    $bytes = [IO.File]::ReadAllBytes($Path)
+    return $bytes.Length -gt 0x15 -and (($bytes[0x15] -band 0x20) -ne 0)
+}
+$startMenu = Join-Path ([Environment]::GetFolderPath('Programs')) 'SysRecon'
+$desktop = [Environment]::GetFolderPath('Desktop')
+foreach ($lnk in (Join-Path $startMenu 'SysRecon.lnk'), (Join-Path $startMenu 'Quick Scan.lnk'), (Join-Path $desktop 'SysRecon.lnk')) {
+    $exists = Test-Path -LiteralPath $lnk
+    Assert-True $exists "shortcut created: $lnk"
+    if ($exists) { Assert-True (Test-RunAsShortcut $lnk) "shortcut requests elevation: $(Split-Path -Leaf $lnk)" }
+}
+$helpLnk = Join-Path $startMenu 'SysRecon Help.lnk'
+if (Test-Path -LiteralPath $helpLnk) {
+    Assert-True (-not (Test-RunAsShortcut $helpLnk)) 'help shortcut does not request elevation'
+}
+
 Write-Step '--help'
 $code = Invoke-Timed -File $Exe -Arguments '--help' -TimeoutSec 60 -Name 'help'
 $help = Get-Output 'help'
@@ -236,6 +181,15 @@ if ($csv) {
 }
 if ($html) {
     Assert-True ((Get-Content -Raw -LiteralPath $html.FullName).StartsWith('<!DOCTYPE html>')) 'HTML report well-formed start'
+}
+# Reports carry usernames, SIDs and admin membership: only SYSTEM,
+# Administrators and the owner may read them, whatever the folder grants.
+foreach ($report in @($csv, $html, $jsonA) | Where-Object { $_ }) {
+    $acl = Get-Acl -LiteralPath $report.FullName
+    $users = @($acl.Access | Where-Object {
+        $_.IdentityReference.Value -match '\\Users$|^Everyone$|Authenticated Users$' })
+    Assert-True ($acl.AreAccessRulesProtected) "$($report.Extension) report ACL does not inherit from the folder"
+    Assert-True ($users.Count -eq 0) "$($report.Extension) report not readable by Users/Everyone"
 }
 if ($jsonA) {
     $r = Get-Content -Raw -LiteralPath $jsonA.FullName | ConvertFrom-Json
@@ -296,17 +250,11 @@ Assert-True (-not (Test-Reg32Key 'Software\SysRecon')) 'Software\SysRecon key re
 Assert-True (-not (Test-Reg32Key 'Software\Microsoft\Windows\CurrentVersion\Uninstall\SysRecon')) 'uninstall entry removed'
 Assert-True (-not (Test-MachinePathContains $InstallDir)) 'install directory removed from machine PATH'
 Assert-True (Test-Path -LiteralPath $ReportsDir) 'silent uninstall keeps reports (user data)'
+Assert-True (-not (Test-Path -LiteralPath $startMenu)) 'Start Menu folder removed'
+Assert-True (-not (Test-Path -LiteralPath (Join-Path $desktop 'SysRecon.lnk'))) 'desktop shortcut removed'
 
 # With _?= the uninstaller leaves itself and the directory behind.
 Remove-Item -Recurse -Force -LiteralPath $InstallDir -ErrorAction SilentlyContinue
 
 # ---------------------------------------------------------------------------
-Write-Host ''
-if ($script:Failures.Count -gt 0) {
-    Write-Host "$($script:Failures.Count) check(s) failed:" -ForegroundColor Red
-    $script:Failures | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
-    Write-Host "Logs and reports: $OutDir"
-    exit 1
-}
-Write-Host 'All checks passed.' -ForegroundColor Green
-Write-Host "Logs and reports: $OutDir"
+Complete-Test
