@@ -198,6 +198,45 @@ function Register-Result {
 }
 
 # ---------------------------------------------------------------------------
+# Native commands
+# ---------------------------------------------------------------------------
+function Invoke-Native {
+    <#
+        Runs a native tool (reg, secedit, auditpol, netsh, net) safely and
+        returns its output lines.
+
+        Under Windows PowerShell 5.1 with $ErrorActionPreference = 'Stop',
+        redirecting a native command's stderr (2>$null, *> $null) turns every
+        stderr line into a terminating NativeCommandError. reg.exe writes even
+        "The operation completed successfully." to stderr, so every rollback
+        died; auditpol's error message killed every -Apply during backup.
+        Equally, the exit code was never checked, so a failed change could be
+        recorded as "Changed". This runs the tool with stderr captured, and
+        throws -- with the tool's own message -- on a non-zero exit code
+        unless -AllowFailure is given.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$FilePath,
+        [string[]]$ArgumentList = @(),
+        [switch]$AllowFailure
+    )
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $output = @(& $FilePath @ArgumentList 2>&1 | ForEach-Object { "$_" })
+        $code = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previous
+    }
+    if ($code -ne 0 -and -not $AllowFailure) {
+        $detail = (@($output | Where-Object { $_.Trim() }) | Select-Object -First 3) -join ' '
+        throw ("{0} {1} failed (exit {2}): {3}" -f (Split-Path -Leaf $FilePath), ($ArgumentList -join ' '), $code, $detail)
+    }
+    return , $output
+}
+
+# ---------------------------------------------------------------------------
 # Core idempotent setters
 # ---------------------------------------------------------------------------
 function Set-RegistryValue {
@@ -323,15 +362,19 @@ function New-BackupBundle {
         # Only export keys that exist; a missing key is restored by deleting on rollback is out of scope.
         $probe = 'Registry::' + $key
         if (Test-Path -LiteralPath $probe) {
-            & reg.exe export $key $out /y *> $null
+            $null = Invoke-Native reg.exe @('export', $key, $out, '/y')
         }
         $i++
     }
 
-    # Local security policy, audit policy, firewall.
-    & secedit.exe /export /cfg (Join-Path $dir 'secpol-before.inf') /quiet *> $null
-    & auditpol.exe /backup /file:(Join-Path $dir 'auditpol-before.csv') *> $null
-    & netsh.exe advfirewall export (Join-Path $dir 'firewall-before.wfw') *> $null
+    # Local security policy, audit policy, firewall. A failure here throws:
+    # without a complete backup nothing may be changed. ("/file:(Join-Path
+    # ...)" was passed to auditpol literally -- PowerShell does not evaluate a
+    # parenthesised expression glued to a bare word -- so the audit-policy
+    # backup failed on every host.)
+    $null = Invoke-Native secedit.exe @('/export', '/cfg', (Join-Path $dir 'secpol-before.inf'), '/quiet')
+    $null = Invoke-Native auditpol.exe @('/backup', "/file:$(Join-Path $dir 'auditpol-before.csv')")
+    $null = Invoke-Native netsh.exe @('advfirewall', 'export', (Join-Path $dir 'firewall-before.wfw'))
 
     # Service start modes and SMB config, for reference / manual restore.
     try { Get-CimInstance Win32_Service | Select-Object Name, StartMode |
@@ -356,27 +399,43 @@ function Invoke-Rollback {
     }
     Write-HardenLog "Rolling back from $Path" 'WARN'
 
+    # Every step is attempted even if an earlier one fails; failures are
+    # reported together at the end and make the run exit non-zero.
+    $failed = [System.Collections.Generic.List[string]]::new()
+    function Invoke-RollbackStep([string]$What, [scriptblock]$Action) {
+        try {
+            & $Action
+            Write-HardenLog "Restored $What" 'OK'
+        }
+        catch {
+            Write-HardenLog "Could not restore ${What}: $($_.Exception.Message)" 'ERROR'
+            $failed.Add($What)
+        }
+    }
+
     $regDir = Join-Path $Path 'registry'
     if (Test-Path $regDir) {
         Get-ChildItem $regDir -Filter '*.reg' | ForEach-Object {
-            & reg.exe import $_.FullName *> $null
-            Write-HardenLog "Imported $($_.Name)" 'OK'
+            $file = $_.FullName
+            Invoke-RollbackStep "registry ($($_.Name))" { $null = Invoke-Native reg.exe @('import', $file) }
         }
     }
     $sec = Join-Path $Path 'secpol-before.inf'
     if (Test-Path $sec) {
-        & secedit.exe /configure /db "$env:windir\security\local.sdb" /cfg $sec /areas SECURITYPOLICY /quiet *> $null
-        Write-HardenLog 'Restored local security policy' 'OK'
+        Invoke-RollbackStep 'local security policy' {
+            $null = Invoke-Native secedit.exe @('/configure', '/db', "$env:windir\security\local.sdb", '/cfg', $sec, '/areas', 'SECURITYPOLICY', '/quiet')
+        }
     }
     $aud = Join-Path $Path 'auditpol-before.csv'
     if (Test-Path $aud) {
-        & auditpol.exe /restore /file:$aud *> $null
-        Write-HardenLog 'Restored audit policy' 'OK'
+        Invoke-RollbackStep 'audit policy' { $null = Invoke-Native auditpol.exe @('/restore', "/file:$aud") }
     }
     $fw = Join-Path $Path 'firewall-before.wfw'
     if (Test-Path $fw) {
-        & netsh.exe advfirewall import $fw *> $null
-        Write-HardenLog 'Restored firewall configuration' 'OK'
+        Invoke-RollbackStep 'firewall configuration' { $null = Invoke-Native netsh.exe @('advfirewall', 'import', $fw) }
+    }
+    if ($failed.Count -gt 0) {
+        throw "Rollback incomplete; could not restore: $($failed -join ', ')"
     }
 
     Write-HardenLog 'Rollback complete. Some feature-level changes (SMBv1 removal, Credential Guard) and account-policy numbers may need manual review; a System Restore point was also created at hardening time as a backstop.' 'WARN'
@@ -463,12 +522,15 @@ function Invoke-Control-AccountPolicy {
         return
     }
     # Read current numbers from `net accounts`.
-    $na = (& net.exe accounts) -join "`n"
+    $na = (Invoke-Native net.exe @('accounts')) -join "`n"
     function Get-NA([string]$label) {
         $m = [regex]::Match($na, [regex]::Escape($label) + '\s*:\s*(\S+)')
         if ($m.Success) { return $m.Groups[1].Value } else { return $null }
     }
-    $desired = @{
+    # Ordered: net accounts rejects a lockout window longer than the lockout
+    # duration, so threshold, then duration, then window must be applied in
+    # that order. A plain hashtable applied them in arbitrary order.
+    $desired = [ordered]@{
         'Minimum password length'         = @{ current = (Get-NA 'Minimum password length'); target = 14; op = 'min'; arg = 'minpwlen'; cis = '1.1.4' }
         'Maximum password age (days)'     = @{ current = (Get-NA 'Maximum password age (days)'); target = 365; op = 'max'; arg = 'maxpwage'; cis = '1.1.2' }
         'Minimum password age (days)'     = @{ current = (Get-NA 'Minimum password age (days)'); target = 1; op = 'min'; arg = 'minpwage'; cis = '1.1.3' }
@@ -496,7 +558,7 @@ function Invoke-Control-AccountPolicy {
             continue
         }
         try {
-            & net.exe accounts ("/{0}:{1}" -f $d.arg, $d.target) *> $null
+            $null = Invoke-Native net.exe @('accounts', ("/{0}:{1}" -f $d.arg, $d.target))
             Register-Result 'AccountPolicy' $label $curRaw $d.target 'Changed' $d.cis 'Low'
         }
         catch {
@@ -515,7 +577,7 @@ function Set-SecEditPolicy {
     )
     try {
         $tmp = Join-Path $env:TEMP ("sysrecon_secedit_{0}.inf" -f ([guid]::NewGuid().ToString('N')))
-        & secedit.exe /export /cfg $tmp /quiet *> $null
+        $null = Invoke-Native secedit.exe @('/export', '/cfg', $tmp, '/quiet')
         $content = Get-Content $tmp -ErrorAction SilentlyContinue
         $current = $null
         $m = [regex]::Match(($content -join "`n"), [regex]::Escape($InfKey) + '\s*=\s*(\S+)')
@@ -541,8 +603,12 @@ $InfKey = $Value
 "@
         $infFile = Join-Path $env:TEMP ("sysrecon_apply_{0}.inf" -f ([guid]::NewGuid().ToString('N')))
         Set-Content -Path $infFile -Value $inf -Encoding Unicode
-        & secedit.exe /configure /db "$env:windir\security\local.sdb" /cfg $infFile /areas SECURITYPOLICY /quiet *> $null
-        Remove-Item $infFile -ErrorAction SilentlyContinue
+        try {
+            $null = Invoke-Native secedit.exe @('/configure', '/db', "$env:windir\security\local.sdb", '/cfg', $infFile, '/areas', 'SECURITYPOLICY', '/quiet')
+        }
+        finally {
+            Remove-Item $infFile -ErrorAction SilentlyContinue
+        }
         Register-Result $Control $Setting $current $Value 'Changed' $Cis $Risk
     }
     catch {
@@ -636,7 +702,8 @@ function Invoke-Control-AuditPolicy {
     foreach ($x in $subs) {
         Invoke-DriftAction -Control 'Audit' -Setting $x.n -Cis $x.cis `
             -GetCurrent {
-                $line = (& auditpol.exe /get /subcategory:"$($x.n)" /r 2>$null | Select-String -Pattern ([regex]::Escape($x.n)))
+                $line = (Invoke-Native auditpol.exe @('/get', "/subcategory:$($x.n)", '/r') -AllowFailure |
+                        Select-String -Pattern ([regex]::Escape($x.n)))
                 if ($line) {
                     $val = ($line.ToString() -split ',')[-1].Trim()
                     $sOn = $val -match 'Success'
@@ -648,7 +715,7 @@ function Invoke-Control-AuditPolicy {
                 $apArgs = @('/set', "/subcategory:$($x.n)")
                 if ($x.s) { $apArgs += '/success:enable' }
                 if ($x.f) { $apArgs += '/failure:enable' }
-                & auditpol.exe @apArgs *> $null
+                $null = Invoke-Native auditpol.exe $apArgs
             }
     }
     # Include command line in process creation events.

@@ -236,10 +236,11 @@ jobs:
           # MSVC diagnostics are not annotated by default; surface them.
           Select-String -Path build.log -Pattern ':\s+(fatal )?error [A-Z]+\d+' |
             Select-Object -First 10 | ForEach-Object { Write-Host "::error::$($_.Line.Trim())" }
-          $warnings = @(Select-String -Path build.log -Pattern ':\s+warning [A-Z]+\d+')
-          if ($warnings.Count -gt 0) {
-            Write-Host "::warning::MSVC reported $($warnings.Count) warning(s); first: $($warnings[0].Line.Trim())"
-          }
+          # MSBuild repeats each diagnostic; report each distinct one once.
+          Select-String -Path build.log -Pattern ':\s+warning [A-Z]+\d+' |
+            ForEach-Object { ($_.Line.Trim() -replace '\s*\[[^\]]+\.vcxproj\]$', '') } |
+            Sort-Object -Unique | Select-Object -First 10 |
+            ForEach-Object { Write-Host "::warning::$_" }
           exit $code
 
       - name: Unit tests

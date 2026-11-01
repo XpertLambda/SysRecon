@@ -96,14 +96,14 @@ bool ServiceEnumerator::EnumerateServices() {
         // Get detailed service information
         SC_HANDLE serviceHandle = OpenServiceW(scm_handle_, svc.service_name.c_str(), SERVICE_QUERY_CONFIG);
         if (serviceHandle) {
-            DWORD bytesNeeded = 0;
-            QueryServiceConfigW(serviceHandle, nullptr, 0, &bytesNeeded);
+            DWORD configBytesNeeded = 0;
+            QueryServiceConfigW(serviceHandle, nullptr, 0, &configBytesNeeded);
             
-            if (bytesNeeded > 0) {
-                std::vector<BYTE> configBuffer(bytesNeeded);
+            if (configBytesNeeded > 0) {
+                std::vector<BYTE> configBuffer(configBytesNeeded);
                 LPQUERY_SERVICE_CONFIGW config = (LPQUERY_SERVICE_CONFIGW)configBuffer.data();
                 
-                if (QueryServiceConfigW(serviceHandle, config, bytesNeeded, &bytesNeeded)) {
+                if (QueryServiceConfigW(serviceHandle, config, configBytesNeeded, &configBytesNeeded)) {
                     svc.executable_path = config->lpBinaryPathName ? String(config->lpBinaryPathName) : L"";
                     svc.startup_type = StartTypeToString(config->dwStartType);
                     svc.service_account = config->lpServiceStartName ? String(config->lpServiceStartName) : L"";

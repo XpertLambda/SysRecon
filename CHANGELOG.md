@@ -8,6 +8,24 @@ All notable changes to SysRecon are documented here.
 
 ### Fixed
 
+- **The hardening script failed on Windows PowerShell 5.1, its in-box target**
+  (found by its first real run, in the new `hardening-test` CI job):
+  - every `-Apply` aborted during backup, before changing anything: the
+    audit-policy backup passed `/file:(Join-Path ...)` to `auditpol`
+    literally, and its error became a terminating error;
+  - every `-Rollback` aborted on `reg.exe import`, which writes "The operation
+    completed successfully." to stderr. Under 5.1 with
+    `$ErrorActionPreference = 'Stop'`, redirected native stderr is a
+    terminating error;
+  - `net accounts`, `secedit` and `auditpol` changes were recorded as
+    "Changed" without checking the exit code;
+  - account-lockout settings were applied in arbitrary (hashtable) order,
+    though `net accounts` rejects a lockout window longer than the duration.
+
+  All native tools now run through one helper that captures stderr and fails
+  on a non-zero exit code. A backup failure aborts before any change; rollback
+  attempts every step and exits non-zero if any could not be restored.
+
 - **Every run with command-line arguments crashed on real Windows** (access
   violation, exit code `0xC0000005`), including `--help`. `main()` forwarded
   `__wargv` to `wmain`, but without `-municode` the MinGW/UCRT startup only
