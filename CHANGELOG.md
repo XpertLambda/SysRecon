@@ -4,7 +4,91 @@ All notable changes to SysRecon are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A module disabled in `config.json` could not be enabled from the command
+  line.** Modules were constructed from the config selection *before* the
+  command-line selection was applied, so `sysrecon.exe --memory` with the
+  shipped config ran nothing and reported success. Selection is now resolved
+  first (`src/core/scan_plan.cpp`) and the engine constructs exactly that set.
+- **Without a config file, the Memory module ran by default.** The engine
+  treated any module missing from its map as enabled. Built-in defaults now
+  match the shipped config (Memory off).
+- **The config was only looked up in the working directory**, so an installed
+  copy run from an elevated prompt (which starts in System32) ran with no
+  config at all. It is now also looked up next to `sysrecon.exe`, and a
+  relative `output_directory` is resolved against the config file's folder.
+- **Config options that were parsed and then ignored now take effect:**
+  `processes.check_dlls`, `registry.scan_startup_keys` / `analyze_policies` /
+  `check_permissions`, `network.scan_listening_ports` / `analyze_connections`,
+  and `output.generate_json` / `generate_csv` / `generate_html` (used when no
+  `-f` is given). `memory.analyze_heap` did nothing and has been removed.
+- `config.json` from the file overrode `--verbose` and `--quiet`.
+- An invalid config (wrong value type, failed validation) left a half-applied
+  mixture of file values and defaults. Loading is now all-or-nothing; an
+  existing but invalid config, or a missing `-c` file, aborts with the specific
+  errors listed. Unknown or removed settings (`security.*`, `max_threads`, ...)
+  are reported as warnings instead of being silently ignored.
+- **Silent uninstall still hung**: the uninstaller's "Are you sure?" prompt in
+  `un.onInit` had no silent default, so `Uninstall.exe /S` blocked before
+  reaching the earlier `IfSilent` fixes.
+- **"Add to PATH" did nothing** but print a hint. It now adds the install
+  directory to the machine PATH (without NSIS's 1024-character string limit,
+  which would have truncated long PATHs), and uninstall removes it again.
+- An upgrade install overwrote the operator's edited `config.json`.
+- The quick scan always reported zero listening ports: it never loaded the TCP
+  table. Ports, connections and the firewall are now actually reported (the
+  risk functions for ports and connections existed but were never called).
+- The firewall check only looked at the MpsSvc service; a running service with
+  a disabled profile was reported as "running". Each profile is now checked,
+  with Group Policy values taking precedence.
+- The registry policy reader read `REG_SZ` data without a bounds-checked
+  terminator (same class as the Run-key crash fixed in 1.1.0).
+- Interactive mode looped forever when stdin reached end of input
+  (`sysrecon.exe < NUL`).
+- Errors from one interactive scan were reported again by every later scan;
+  modules from an earlier scan stayed alive and kept contributing to reports.
+- HTML report header values (computer and user name) were not escaped.
+- `build-installer.sh` / `.bat` generated a `config.json` in an obsolete format
+  the binary cannot read, and a stand-in LICENSE with different terms. Both are
+  tracked files; a missing one is now an error. `clean.sh` no longer hardcodes
+  the version.
+- CI ran only on `main`.
+
 ### Added
+
+- **Account findings by RID**: the built-in Administrator (RID 500) and Guest
+  (RID 501) are detected even when renamed, along with enabled accounts that
+  may have an empty password (`UF_PASSWD_NOTREQD`). Administrators-group
+  membership is resolved by well-known SID, so it works on localised Windows.
+- **Password and lockout policy** check (minimum length, lockout threshold and
+  duration, maximum age, history) against the CIS L1 values the hardening
+  script applies, so audit → remediate → re-audit closes.
+- Network findings for network-reachable services on commonly attacked ports
+  and for established connections to common backdoor/C2 ports, with the owning
+  process name; plus one inventory entry listing exposed TCP ports.
+- `--all` (all six modules, including Memory). The README already documented
+  it; it did not exist.
+- Reports record the run context (elevated or not, modules, stealth mode,
+  config file used) and an **Incomplete Checks** section listing every check
+  that failed, in JSON, CSV and HTML. Findings are sorted by severity.
+- End-of-scan console summary by severity, and scan duration.
+- `sysrecon_core` now contains `Utils` (with a portable UTF-8 codec that
+  replaces invalid input with U+FFFD), `Logger`, `ConfigManager` and the scan
+  plan, so they are unit-tested natively; `tests/test_core.cpp` is built for the
+  first time. 94 tests, up from 41, including the IPv4 parsing tests the 1.1.0
+  entry claimed but that did not exist.
+- CI builds the NSIS installer with warnings as errors, checks that interactive
+  mode exits on EOF, and runs the parser and PSScriptAnalyzer over the
+  hardening script on a Windows runner.
+- **End-to-end Windows test** (`windows-test` CI job,
+  `tests/windows/smoke-test.ps1`) on a real Windows runner: silent install,
+  PATH, scans with no incomplete checks, config discovery from another
+  directory, all report formats, quick/stealth/error paths, upgrade keeping
+  `config.json`, and silent uninstall under a timeout. Covers the Windows APIs
+  wine does not implement.
+- Installer `/ADDTOPATH` switch, so an unattended `/S` install can select the
+  default-off "Add to PATH" component.
 
 - **Windows hardening companion.** `hardening/Invoke-SysReconHardening.ps1`
   applies a CIS Level 1 (workstation)-aligned baseline, closing the loop with
@@ -31,9 +115,15 @@ All notable changes to SysRecon are documented here.
 
 ### Known limitations
 
-- The hardening script is syntax-checked, lint-clean, and its parsing/decision/
-  selection logic is unit-tested, but it has **not** been run end-to-end on a
-  live Windows host by us. Validate on a VM (fresh + used snapshots) per the
+- **The memory module's malware scan still cannot report anything**:
+  `ScanForMalware` iterates a per-process inventory that only
+  `AnalyzeProcessMemory` fills, and nothing calls it. The RWX-region check and
+  `CreateMemoryDump` are unreachable for the same reason, and
+  `memory.create_dumps` has no effect. Unchanged in this revision.
+- `--stealth` now has a defined meaning (no console log, no per-process DLL
+  snapshots, no Memory module). It does not hide SysRecon from EDR.
+- The hardening script is parsed and linted in CI, but has no behavioural tests
+  and has **not** been run end-to-end on a live Windows host by us. Validate on a VM (fresh + used snapshots) per the
   checklist in `docs/HARDENING.md` before production use.
 
 ## [1.1.0] — 2026-07-16

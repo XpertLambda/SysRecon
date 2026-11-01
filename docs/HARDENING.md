@@ -181,9 +181,10 @@ anything the bundle does not cover.
 
 ## Known limitations
 
-- **Not tested end-to-end by the author on Windows.** The script parses cleanly,
-  passes PSScriptAnalyzer, and its parsing / decision / selection logic is unit-
-  tested, but it has **not** been run against a live Windows host by us. Validate
+- **Not tested end-to-end by the author on Windows.** CI parses the script and
+  runs PSScriptAnalyzer (with `hardening/PSScriptAnalyzerSettings.psd1`) on a
+  Windows runner. There are no automated tests of its behaviour, and it has
+  **not** been run against a live Windows host by us. Validate
   on a VM (fresh + used snapshots) before production use — see the checklist
   below. This is stated for the same reason the installer's uninstall path is
   flagged as VM-pending in the changelog: we do not claim verification we did

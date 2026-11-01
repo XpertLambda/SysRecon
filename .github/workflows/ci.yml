@@ -1,10 +1,11 @@
 name: CI
 
 on:
+  # Every branch: feature branches (e.g. windows-hardening) previously got no
+  # CI at all because only main was listed.
   push:
-    branches: [main]
+    branches: ['**']
   pull_request:
-    branches: [main]
 
 jobs:
   unit-tests:
@@ -19,7 +20,7 @@ jobs:
           sudo apt-get install -y cmake build-essential
 
       - name: Configure
-        run: cmake -S . -B build-tests -DCMAKE_BUILD_TYPE=Release -DSYSRECON_BUILD_TESTS=ON
+        run: cmake -S . -B build-tests -DCMAKE_BUILD_TYPE=Release -DSYSRECON_BUILD_TESTS=ON -DSYSRECON_WERROR=ON
 
       - name: Build tests
         run: cmake --build build-tests --target sysrecon_tests -j$(nproc)
@@ -89,3 +90,86 @@ jobs:
             exit 1
           fi
           echo "OK: captured $(wc -c < help.txt) bytes"
+
+      - name: Interactive mode must exit on end of input
+        env:
+          WINEDEBUG: "-all"
+        run: |
+          # Regression guard: GetMenuChoice looped forever when stdin hit EOF.
+          timeout 60 wine build/sysrecon.exe < /dev/null > menu.txt 2>/dev/null
+          echo "OK: interactive mode exited on EOF"
+
+  installer:
+    name: Build NSIS installer
+    runs-on: ubuntu-latest
+    needs: cross-compile
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: sysrecon-exe
+          path: build
+
+      - name: Install NSIS
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nsis
+
+      - name: Compile installer
+        run: makensis -V2 -WX installer.nsi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sysrecon-installer
+          path: SysRecon-Setup-*.exe
+
+  hardening-lint:
+    name: Lint hardening script (PSScriptAnalyzer)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse check
+        shell: pwsh
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            "$PWD/hardening/Invoke-SysReconHardening.ps1", [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) { $errors | ForEach-Object { Write-Error $_.ToString() }; exit 1 }
+
+      - name: PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          Install-Module PSScriptAnalyzer -Scope CurrentUser -Force
+          $results = Invoke-ScriptAnalyzer -Path hardening/Invoke-SysReconHardening.ps1 `
+            -Settings hardening/PSScriptAnalyzerSettings.psd1
+          $results | Format-Table -AutoSize
+          if ($results | Where-Object Severity -in 'Error','Warning') { exit 1 }
+
+  windows-test:
+    name: End-to-end test on Windows (installer + scan)
+    runs-on: windows-latest
+    needs: installer
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: sysrecon-installer
+          path: dist
+
+      - name: Install, scan, upgrade, uninstall
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem dist -Filter 'SysRecon-Setup-*.exe' | Select-Object -First 1
+          if (-not $setup) { throw 'installer artifact not found' }
+          ./tests/windows/smoke-test.ps1 -Installer $setup.FullName -OutDir "$env:RUNNER_TEMP/sysrecon-smoke"
+
+      - name: Upload logs and reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-test-output
+          path: ${{ runner.temp }}/sysrecon-smoke
+          if-no-files-found: ignore

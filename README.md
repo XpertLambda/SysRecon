@@ -91,12 +91,15 @@ SysRecon is an enterprise-class security assessment platform designed to provide
 
 #### Memory Forensics & Analysis
 
-- Process memory region enumeration via VirtualQueryEx
-- Detection of Read-Write-Execute (RWX) memory regions-indicators of code injection
-- DLL injection pattern recognition
-- Process hollowing detection through PE header validation
-- Shellcode signature matching using pattern analysis
-- Memory-resident threat identification
+- Injection detection: a PE image in private (non-file-backed) executable
+  memory, the signature of a reflectively loaded module
+- Process hollowing detection: the main image base backed by private rather
+  than image memory
+- Verified Windows system processes (name **and** path) are skipped
+
+> **Current limitation:** the RWX-region check, the shellcode/malware scan and
+> evidence dumps (`memory.create_dumps`) exist in the code but are not reached
+> by any scan path in this version. See CHANGELOG "Known limitations".
 
 ### Reporting & Intelligence
 
@@ -233,9 +236,9 @@ SysRecon includes a professional Windows installer with full GUI for easy deploy
 ✅ **Graphical Installation Wizard** - Click-through setup like professional software  
 ✅ **Start Menu Integration** - Multiple shortcuts (main app, help, quick scan, reports)  
 ✅ **Desktop Shortcut** - Optional quick access from desktop  
-✅ **PATH Integration** - Optional command-line access from anywhere  
-✅ **Automatic Configuration** - Sets up reports directory and default config  
-✅ **Professional Uninstaller** - Complete removal with option to keep reports  
+✅ **PATH Integration** - Optional (off by default) machine-PATH entry, removed again on uninstall  
+✅ **Automatic Configuration** - Sets up reports directory and default config; an upgrade keeps your edited `config.json` (the shipped default stays in `configs\default.json`)  
+✅ **Professional Uninstaller** - Complete removal with option to keep reports; `Uninstall.exe /S` runs fully unattended  
 
 #### Quick Start:
 
@@ -361,13 +364,30 @@ sysrecon.exe
 
 Launches the interactive menu. For command-line usage, see examples below.
 
-To run a full scan via command-line:
+To scan from the command line without the menu, pass any option. With no
+module flag, the modules enabled in `config.json` run (everything except
+Memory in the shipped config):
 
 ```cmd
-sysrecon.exe --accounts --services --processes --network --registry --memory
+sysrecon.exe --verbose
 ```
 
-Executes a comprehensive security assessment across all modules with default configuration.
+To include every module, Memory too:
+
+```cmd
+sysrecon.exe --all
+```
+
+**Configuration lookup.** Without `-c`, SysRecon uses `.\config.json` from the
+working directory, then `config.json` next to `sysrecon.exe`. That second
+location means an installed copy finds its config even from an elevated
+prompt that starts in `C:\Windows\System32`. A relative `output_directory` in
+the config is resolved against the config file's folder, so the installed
+default writes to `C:\Program Files\SysRecon\reports`. If no config is found,
+built-in defaults apply, and they also keep Memory off. A config file that
+exists but is invalid (bad JSON, wrong value types, failed validation) stops
+the run with the specific errors listed. Unknown or removed settings are
+reported as warnings.
 
 #### Quick Assessment Mode
 
@@ -375,7 +395,8 @@ Executes a comprehensive security assessment across all modules with default con
 sysrecon.exe --quick
 ```
 
-Performs accelerated scanning with reduced depth-ideal for rapid initial reconnaissance.
+Runs the essential checks only: local users, services, listening ports,
+firewall state and Run keys. Processes and Memory are skipped.
 
 #### Verbose Diagnostic Mode
 
@@ -409,6 +430,11 @@ REM Memory forensics and injection detection
 sysrecon.exe --memory
 ```
 
+A module flag **replaces** the config file's module selection, so
+`sysrecon.exe --memory` runs the Memory module even though the shipped config
+disables it. Before this fix, a module disabled in the config could not be
+turned back on from the command line.
+
 #### Combined Module Scanning
 
 ```cmd
@@ -441,9 +467,12 @@ sysrecon.exe --format html
 REM Multiple formats
 sysrecon.exe --format json --format html
 
-REM All formats (default)
+REM All formats
 sysrecon.exe --format all
 ```
+
+Without `--format`, the `output.generate_json` / `generate_csv` /
+`generate_html` settings in `config.json` decide (all three by default).
 
 #### Comprehensive Example
 
@@ -462,7 +491,17 @@ sysrecon.exe --accounts --services --network ^
 sysrecon.exe --stealth --quiet
 ```
 
-Minimizes system footprint and suppresses console output-useful for sensitive environments or systems under active monitoring.
+Low-footprint mode for production hosts. Concretely, stealth mode:
+
+- turns off console logging (the log file and reports are still written);
+- skips the per-process loaded-DLL snapshots, which open a handle to every
+  process;
+- never runs the Memory module, even when it is requested with `--memory` or
+  `--all`.
+
+It does not hide SysRecon from EDR and makes no attempt to; it only leaves out
+the checks that touch other processes. `general.stealth_mode` in `config.json`
+turns it on as well.
 
 #### Compliance Scanning
 
@@ -485,16 +524,16 @@ Leverages custom configuration profiles for compliance-specific assessments.
 | `-v, --version` | Display version information and build details |
 | `--verbose` | Enable detailed diagnostic output and API call logging |
 | `--quiet` | Suppress all non-critical console output |
-| `--quick` | Enable fast-scan mode with reduced analysis depth |
-| `--stealth` | Minimize system footprint and detection signatures |
+| `--quick` | Essential checks only (users, services, listening ports, firewall, Run keys) |
+| `--stealth` | Low-footprint scan: no console log, no per-process DLL snapshots, no Memory module |
 
 ### Configuration Options
 
 | Option | Argument | Description |
 |--------|----------|-------------|
-| `-c, --config` | `<file>` | Load configuration from JSON file (default: config.json) |
-| `-o, --output` | `<directory>` | Set output directory for reports (default: ./reports) |
-| `-f, --format` | `<format>` | Report format: `json`, `csv`, `html`, `all` (default: all) |
+| `-c, --config` | `<file>` | Load configuration from a JSON file. Default: `.\config.json`, then `config.json` next to `sysrecon.exe`. A missing or invalid explicit file is an error |
+| `-o, --output` | `<directory>` | Output directory (default: the config's `output_directory`, resolved against the config file's folder) |
+| `-f, --format` | `<format>` | Report format: `json`, `csv`, `html`, `all` (default: the config's `generate_*` settings) |
 
 ### Module Selection
 
@@ -505,8 +544,18 @@ Leverages custom configuration profiles for compliance-specific assessments.
 | `--processes` | Running Processes | Process enumeration, module loading, memory footprint |
 | `--network` | Network Infrastructure | Connections, interfaces, shares, firewall rules |
 | `--registry` | Registry Analysis | Persistence keys, security policies, ACL analysis |
-| `--memory` | Memory Forensics | Memory scanning, injection detection, shellcode analysis |
-| `--all` | All Modules | Comprehensive assessment (default if no modules specified) |
+| `--memory` | Memory Forensics | Injection and process-hollowing detection (see the limitation note under Memory Forensics) |
+| `--all` | All Modules | All six modules, including Memory |
+
+Without any module flag, the modules enabled in `config.json` run. With one or
+more flags, exactly those modules run, whatever the config says.
+
+### Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Scan completed and every requested report was written. Checks that could not complete are listed under **Incomplete Checks** in each report |
+| `1` | Invalid arguments, missing or invalid config file, no modules selected, initialization failure (including `require_admin` without elevation), or a report that could not be written |
 
 ### Advanced Options
 
@@ -1067,14 +1116,19 @@ SysRecon/
 ├── src/                        # Core application source
 │   ├── main.cpp               # Application entry point
 │   └── core/                  # Core implementation
-│       ├── engine.cpp
-│       ├── config.cpp
-│       ├── logger.cpp
-│       ├── text_utils.cpp
-│       └── utils.cpp
+│       ├── engine.cpp         # Scan lifecycle (Windows)
+│       ├── utils.cpp          # Win32 helpers (Windows)
+│       ├── config.cpp         # ┐
+│       ├── logger.cpp         # │
+│       ├── scan_plan.cpp      # │ sysrecon_core: portable,
+│       ├── text_utils.cpp     # │ unit-tested natively
+│       └── utils_common.cpp   # ┘
 │
-├── tests/                      # Unit and regression tests
-│   ├── test_core.cpp
+├── tests/                      # Unit and regression tests (sysrecon_core)
+│   ├── test_core.cpp           # Utils, UTF-8 codec, Logger
+│   ├── test_config.cpp         # config.json parsing and validation
+│   ├── test_scan_plan.cpp      # Module/format/config-path precedence
+│   ├── test_text_utils.cpp     # IPv4, registry buffers, file names
 │   ├── test_report_escaping.cpp
 │   └── test_whitelist.cpp
 │
@@ -1232,7 +1286,7 @@ A: Yes, create a custom JSON configuration file and use the `--config` option. S
 A: SysRecon is not a traditional antivirus tool. It identifies indicators of compromise (IOCs) such as:
 - Unquoted service paths (privilege escalation vectors)
 - Suspicious registry persistence mechanisms
-- Memory injection patterns (RWX regions, DLL injection)
+- Memory injection patterns (reflectively loaded PE images, process hollowing)
 - Unusual process behaviors
 
 For comprehensive malware detection, use SysRecon alongside dedicated endpoint protection solutions.
@@ -1249,18 +1303,23 @@ A: SysRecon offers:
 ### Deployment Questions
 
 **Q: Can I deploy SysRecon via Group Policy?**  
-A: Yes, use Group Policy software deployment to distribute the MSI installer or portable executable across your domain.
+A: There is no MSI package. Deploy the NSIS installer silently (below) with a startup script, Intune or another software-distribution tool, or copy the portable executable and `config.json` together.
 
 **Q: Does SysRecon support silent installation?**  
-A: Yes, use the `/S` flag for silent installation:
+A: Yes. `/S` installs silently with the default components; add `/ADDTOPATH`
+to also add the install directory to the machine PATH. `/S` on the
+uninstaller removes it silently and keeps generated reports:
 ```cmd
 SysRecon-Setup-1.1.0.exe /S
+SysRecon-Setup-1.1.0.exe /S /ADDTOPATH
+"C:\Program Files\SysRecon\Uninstall.exe" /S
 ```
+An upgrade (`/S` over an existing install) keeps your edited `config.json`.
 
 **Q: Where are reports stored by default?**  
 A: 
 - Installed version: `C:\Program Files\SysRecon\reports\`
-- Portable version: `.\reports\` (relative to executable location)
+- Portable version: `reports\` next to `config.json`, so next to the executable when the two are kept together; `.\reports\` in the working directory if no config file is found
 
 **Q: Can I run SysRecon from a USB drive?**  
 A: Yes, use the portable executable version. Note that administrator privileges are still required on the target system.
@@ -1292,7 +1351,7 @@ A:
 - Process and module monitoring with parent-child relationship mapping
 - Network infrastructure assessment (connections, interfaces, shares, firewall)
 - Registry persistence mechanism detection and security policy analysis
-- Memory forensics (RWX region detection, DLL injection, process hollowing)
+- Memory forensics (reflectively loaded PE images, process hollowing)
 
 #### Reporting & Intelligence
 - Risk assessment framework (Critical, High, Medium, Low)
@@ -1378,7 +1437,7 @@ Want to see a specific feature? Submit a feature request via GitHub Issues.
 
 | Scan Type | Modules |
 |-----------|---------|
-| Quick Scan (`--quick`) | Accounts, Services, Network (listening ports), Registry (startup keys) |
+| Quick Scan (`--quick`) | Accounts (users), Services, Network (listening ports, firewall), Registry (startup keys) |
 | Full Scan (default) | All enabled modules, subject to `config.json` |
 | Memory | Disabled by default - see Operational Considerations before enabling |
 
@@ -1449,12 +1508,21 @@ To the information security community for continuous research, threat intelligen
 
 - ✅ Continuous integration (GitHub Actions): native unit tests, Windows
   cross-compile, and a wine smoke test on every push and pull request
-- ✅ Unit tests for the platform-independent core (`sysrecon_core`): report
-  escaping (HTML/CSV), whitelist matching, path handling, IPv4 parsing
+- ✅ Unit tests (94) for the platform-independent core (`sysrecon_core`):
+  report escaping (HTML/CSV), whitelist matching, path handling, IPv4 parsing,
+  UTF-8 conversion, `Utils`, `Logger`, `config.json` parsing and validation
+  (including the shipped file), module/format/config-path precedence, registry
+  buffer decoding and file-name sanitising
 - ✅ Regression tests pinning known security issues: report XSS, CSV formula
   injection, whitelist evasion via masquerading, and loss of redirected output
-- 🔄 Unit tests for `Utils` and `Logger` - pending their split out of the
-  Win32-coupled executable target (`tests/test_core.cpp` is not yet built)
+- ✅ CI also builds the NSIS installer (`makensis -WX`), checks that
+  interactive mode exits on end of input, and lints the hardening script with
+  PSScriptAnalyzer on a Windows runner
+- ✅ End-to-end Windows test on a GitHub `windows-latest` runner
+  (`tests/windows/smoke-test.ps1`): silent install with `/ADDTOPATH`, scans that
+  must complete with no incomplete checks, config discovery, report formats,
+  stealth and error handling, upgrade keeping `config.json`, and a silent
+  uninstall under a timeout. The script also runs by hand in a disposable VM
 - 🔄 Integration tests against live Windows APIs - currently manual, on a
   Windows VM; see the Verification section of the delivery plan
 - ❌ Performance benchmarks - not implemented
@@ -1462,7 +1530,7 @@ To the information security community for continuous research, threat intelligen
 Run the suite with:
 
 ```bash
-cmake -S . -B build-tests -DSYSRECON_BUILD_TESTS=ON
+cmake -S . -B build-tests -DSYSRECON_BUILD_TESTS=ON -DSYSRECON_WERROR=ON
 cmake --build build-tests --target sysrecon_tests -j$(nproc)
 cd build-tests && ctest --output-on-failure
 ```
@@ -1495,10 +1563,12 @@ Read this before running SysRecon on a production or monitored host.
   network interface MAC/IP addresses. They are written with default inherited
   ACLs, and are neither compressed nor encrypted - SysRecon does not implement
   at-rest encryption or report signing. Store them accordingly.
-- **The output directory is relative to the working directory.** The default is
-  `./reports`. Launched from an elevated shell (which typically starts in
-  `C:\Windows\System32`), that is where reports will be written. Pass `-o` or
-  set `output.output_directory` explicitly.
+- **Where output goes.** A relative `output_directory` in `config.json` is
+  resolved against the config file's folder, and the config is also looked up
+  next to `sysrecon.exe`, so an installed copy writes to its own `reports`
+  folder whatever the working directory. A relative `-o` is relative to the
+  working directory. With no config file at all, the default is `./reports`
+  in the working directory.
 - **Administrator rights are required for complete results.** Without them,
   process image paths, service configuration and memory inspection are partly
   or wholly unavailable, and SysRecon reports which checks did not complete

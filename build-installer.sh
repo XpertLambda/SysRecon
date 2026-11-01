@@ -64,36 +64,15 @@ fi
 echo -e "${GREEN}[OK]${NC} SysRecon executable found"
 echo
 
-# Check if required files exist
-if [ ! -f "config.json" ]; then
-    echo -e "${YELLOW}[WARNING]${NC} config.json not found - creating default"
-    cat > config.json <<EOF
-{
-  "verbose": false,
-  "output_dir": "./reports",
-  "report_format": "all",
-  "modules": {
-    "accounts": true,
-    "services": true,
-    "processes": true,
-    "network": true,
-    "registry": true,
-    "memory": true
-  }
-}
-EOF
-fi
-
-if [ ! -f "LICENSE" ]; then
-    echo -e "${YELLOW}[WARNING]${NC} LICENSE file not found - creating placeholder"
-    cat > LICENSE <<EOF
-Proprietary Software - All Rights Reserved
-Copyright (c) 2025 XpertLambda
-
-Unauthorized copying, modification, distribution, or use of this software
-is strictly prohibited.
-EOF
-fi
+# Check required files. These are tracked in git; generating stand-ins here
+# used to produce a config.json in an obsolete schema the binary does not
+# read, and a LICENSE with different terms from the real one.
+for required in config.json LICENSE; do
+    if [ ! -f "$required" ]; then
+        echo -e "${RED}[ERROR]${NC} $required not found (it is tracked in git; restore it with: git checkout -- $required)"
+        exit 1
+    fi
+done
 
 if [ ! -f "README.md" ]; then
     echo -e "${RED}[ERROR]${NC} README.md not found"

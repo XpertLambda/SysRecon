@@ -18,6 +18,7 @@
 !include "LogicLib.nsh"
 !include "x64.nsh"
 !include "FileFunc.nsh"
+!include "Sections.nsh"
 
 ;--------------------------------
 ; General Configuration
@@ -131,6 +132,8 @@ Function .onInit
     Abort
   ${EndIf}
 
+  Call ApplyCommandLineOptions
+
   ; Check if already installed
   ReadRegStr $0 ${PRODUCT_UNINST_ROOT_KEY} "${PRODUCT_UNINST_KEY}" "UninstallString"
   ${If} $0 != ""
@@ -158,8 +161,12 @@ Section "Core Files" SecCore
   ; does not treat "\" as a path separator, and NSIS on Windows accepts "/".
   File "build/sysrecon.exe"
   
-  ; Configuration file
+  ; Configuration file. Never overwrite an existing config.json: an upgrade
+  ; used to silently replace the operator's settings with the defaults. The
+  ; shipped default is always available as configs\default.json.
+  SetOverwrite off
   File "config.json"
+  SetOverwrite on
   
   ; Documentation
   File "README.md"
@@ -171,7 +178,9 @@ Section "Core Files" SecCore
   
   ; Create example config
   CreateDirectory "$INSTDIR\configs"
-  CopyFiles "$INSTDIR\config.json" "$INSTDIR\configs\default.json"
+  SetOutPath "$INSTDIR\configs"
+  File /oname=default.json "config.json"
+  SetOutPath "$INSTDIR"
   
   ; Store installation folder
   WriteRegStr HKLM "Software\${PRODUCT_NAME}" "InstallDir" "$INSTDIR"
@@ -224,10 +233,43 @@ Section "Desktop Shortcut" SecDesktop
   CreateShortcut "$DESKTOP\${PRODUCT_NAME}.lnk" "$INSTDIR\sysrecon.exe" "" "$INSTDIR\sysrecon.exe" 0 SW_SHOWNORMAL "" "Windows Security Audit Tool (Run as Administrator)"
 SectionEnd
 
-Section "Add to PATH" SecPath
-  ; Add installation directory to system PATH (simplified - user can do manually)
-  DetailPrint "To add to PATH manually, add: $INSTDIR"
+Section /o "Add to PATH" SecPath
+  ; Previously this section only printed a hint while its description claimed
+  ; it added the directory to PATH.
+  ;
+  ; PowerShell edits the machine PATH rather than NSIS string functions,
+  ; which are limited to NSIS_MAX_STRLEN (1024 by default) and would silently
+  ; truncate -- i.e. destroy -- a long PATH. The directory is passed through
+  ; an environment variable so no quoting of $INSTDIR is ever needed.
+  System::Call 'Kernel32::SetEnvironmentVariable(t "SYSRECON_DIR", t "$INSTDIR")i'
+  nsExec::ExecToLog 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$d=$$env:SYSRECON_DIR; $$p=[Environment]::GetEnvironmentVariable(\"Path\",\"Machine\"); $$parts=@($$p -split \";\" | Where-Object { $$_ -ne \"\" }); if ($$parts -notcontains $$d) { [Environment]::SetEnvironmentVariable(\"Path\", (($$parts + $$d) -join \";\"), \"Machine\") }"'
+  Pop $0
+  ${If} $0 == 0
+    WriteRegDWORD HKLM "Software\${PRODUCT_NAME}" "AddedToPath" 1
+    DetailPrint "Added $INSTDIR to the system PATH (open a new terminal to use it)"
+  ${Else}
+    DetailPrint "Could not update PATH (exit code $0); add $INSTDIR manually"
+  ${EndIf}
 SectionEnd
+
+;--------------------------------
+; Command-line options
+;
+;   /ADDTOPATH   select the (default-off) "Add to PATH" component. Lets an
+;                unattended install (/S) request it, since /S otherwise only
+;                installs default-selected sections.
+;
+; Defined after the sections because it references their index constants;
+; .onInit reaches it with Call, which resolves at link time.
+
+Function ApplyCommandLineOptions
+  ${GetParameters} $R0
+  ClearErrors
+  ${GetOptions} $R0 "/ADDTOPATH" $R1
+  ${IfNot} ${Errors}
+    !insertmacro SelectSection ${SecPath}
+  ${EndIf}
+FunctionEnd
 
 ;--------------------------------
 ; Section Descriptions
@@ -243,12 +285,21 @@ SectionEnd
 ; Uninstaller Section
 
 Section "Uninstall"
+  ; Remove the PATH entry only if this installer added it.
+  ReadRegDWORD $0 HKLM "Software\${PRODUCT_NAME}" "AddedToPath"
+  ${If} $0 == 1
+    System::Call 'Kernel32::SetEnvironmentVariable(t "SYSRECON_DIR", t "$INSTDIR")i'
+    nsExec::ExecToLog 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$d=$$env:SYSRECON_DIR; $$p=[Environment]::GetEnvironmentVariable(\"Path\",\"Machine\"); $$parts=@($$p -split \";\" | Where-Object { $$_ -ne \"\" -and $$_ -ne $$d }); [Environment]::SetEnvironmentVariable(\"Path\", ($$parts -join \";\"), \"Machine\")"'
+    Pop $0
+  ${EndIf}
+
   ; Remove files
   Delete "$INSTDIR\sysrecon.exe"
   Delete "$INSTDIR\config.json"
   Delete "$INSTDIR\README.md"
   Delete "$INSTDIR\README.txt"
   Delete "$INSTDIR\LICENSE"
+  Delete "$INSTDIR\sysrecon.log"
   Delete "$INSTDIR\Uninstall.exe"
   
   ; Remove example configs
@@ -293,7 +344,10 @@ SectionEnd
 ; Uninstaller Functions
 
 Function un.onInit
-  MessageBox MB_YESNO|MB_ICONQUESTION "Are you sure you want to uninstall ${PRODUCT_NAME}?" IDYES continue
+  ; /SD IDYES: under /S, MessageBox still blocks unless given a silent default.
+  ; Without it `Uninstall.exe /S` waited forever on this prompt, before the
+  ; IfSilent guards in the uninstall section were ever reached.
+  MessageBox MB_YESNO|MB_ICONQUESTION "Are you sure you want to uninstall ${PRODUCT_NAME}?" /SD IDYES IDYES continue
   Abort
   continue:
 FunctionEnd

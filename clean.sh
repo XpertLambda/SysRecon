@@ -22,6 +22,9 @@ print_warning() {
     echo -e "\e[33m[WARNING]\e[0m $1"
 }
 
+cd "$(dirname "${BASH_SOURCE[0]}")" || exit 1
+VERSION="$(sed -n 's/^!define PRODUCT_VERSION "\(.*\)"/\1/p' installer.nsi)"
+
 # Remove build directory
 if [ -d "build" ]; then
     print_info "Removing build directory..."
@@ -32,12 +35,12 @@ else
 fi
 
 # Remove installer executable
-if [ -f "SysRecon-Setup-1.1.0.exe" ]; then
+if [ -f "SysRecon-Setup-${VERSION}.exe" ]; then
     print_info "Removing installer executable..."
-    rm -f SysRecon-Setup-1.1.0.exe
-    print_success "SysRecon-Setup-1.1.0.exe removed"
+    rm -f SysRecon-Setup-${VERSION}.exe
+    print_success "SysRecon-Setup-${VERSION}.exe removed"
 else
-    print_warning "SysRecon-Setup-1.1.0.exe not found"
+    print_warning "SysRecon-Setup-${VERSION}.exe not found"
 fi
 
 # Remove any old installer versions
@@ -49,9 +52,9 @@ if [ -n "$OLD_INSTALLERS" ]; then
 fi
 
 # Remove NSIS package (if exists)
-if [ -f "SysRecon-1.1.0-win64.exe" ]; then
+if [ -f "SysRecon-${VERSION}-win64.exe" ]; then
     print_info "Removing NSIS package..."
-    rm -f SysRecon-1.1.0-win64.exe
+    rm -f SysRecon-${VERSION}-win64.exe
     print_success "NSIS package removed"
 fi
 
@@ -63,9 +66,9 @@ if [ -f "checksums.txt" ]; then
 fi
 
 # Remove portable packages (if any)
-if [ -d "SysRecon-1.1.0-Portable" ] || [ -f "SysRecon-1.1.0-Portable.zip" ]; then
+if [ -d "SysRecon-${VERSION}-Portable" ] || [ -f "SysRecon-${VERSION}-Portable.zip" ]; then
     print_info "Removing portable packages..."
-    rm -rf SysRecon-1.1.0-Portable SysRecon-1.1.0-Portable.zip SysRecon-Portable.zip
+    rm -rf SysRecon-${VERSION}-Portable SysRecon-${VERSION}-Portable.zip SysRecon-Portable.zip
     print_success "Portable packages removed"
 fi
 

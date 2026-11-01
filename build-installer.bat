@@ -50,18 +50,13 @@ echo.
 
 REM Check if required files exist
 if not exist "config.json" (
-    echo [WARNING] config.json not found - creating default
-    echo { > config.json
-    echo   "verbose": false, >> config.json
-    echo   "output_dir": "./reports", >> config.json
-    echo   "report_format": "all" >> config.json
-    echo } >> config.json
+    echo [ERROR] config.json not found ^(tracked in git; restore with: git checkout -- config.json^)
+    exit /b 1
 )
 
 if not exist "LICENSE" (
-    echo [WARNING] LICENSE file not found - creating placeholder
-    echo Proprietary Software - All Rights Reserved > LICENSE
-    echo Copyright (c) 2025 XpertLambda >> LICENSE
+    echo [ERROR] LICENSE not found ^(tracked in git; restore with: git checkout -- LICENSE^)
+    exit /b 1
 )
 
 if not exist "README.md" (
