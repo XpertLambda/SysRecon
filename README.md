@@ -1,12 +1,20 @@
 # SysRecon - Windows Security Audit & Reconnaissance Tool
 
-[![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)](https://github.com/XpertLambda/SysRecon/releases)
+[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](https://github.com/XpertLambda/SysRecon/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010/11%20|%20Server%202016+-blue.svg)](https://github.com/XpertLambda/SysRecon)
 [![Language](https://img.shields.io/badge/language-C++20-orange.svg)](https://github.com/XpertLambda/SysRecon)
 [![License](https://img.shields.io/badge/license-Commercial-red.svg)](LICENSE)
 [![Build](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/XpertLambda/SysRecon)
 
-## ⚠️ Work In Progress (WIP) : This version is not yet usable
+## 🛡️ Phase 2 — Penetration-Testing Assessment Release
+
+SysRecon 2.0.0 adds a dedicated **privilege-escalation assessment** engine for
+authorised penetration testers and defenders. Every finding is reported with a
+concrete **remediation** step and a **MITRE ATT&CK** reference, so the same run
+that surfaces a weakness also tells you how to close it.
+
+> **Authorised use only.** SysRecon is a read-only assessment tool. Run it only
+> on systems you own or are explicitly authorised to test.
 
 ---
 
@@ -39,11 +47,12 @@ SysRecon is an enterprise-class security assessment platform designed to provide
 
 ### Key Differentiators
 
-- **Comprehensive Coverage**: Six specialized assessment modules covering user accounts, services, processes, network infrastructure, registry configurations, and memory forensics
+- **Comprehensive Coverage**: Seven specialized assessment modules covering user accounts, services, processes, network infrastructure, registry configurations, memory forensics, and local privilege escalation
+- **Actionable by Design**: Each finding carries a remediation step and a MITRE ATT&CK reference, turning raw audit data into a prioritized fix list
+- **Pentest-Grade Checks**: Unquoted/weak-ACL services, world-writable service binaries, writable `PATH` directories, `AlwaysInstallElevated`, UAC posture, and stored-credential exposure
 - **Enterprise Architecture**: Built with C++20 for optimal performance and minimal system footprint
 - **Flexible Deployment**: Cross-platform compilation support with native Windows execution
-- **Professional Reporting**: Multi-format output including JSON, CSV, and HTML with executive summaries and detailed technical findings
-- **Production-Ready**: Over 6,500 lines of production-quality code with extensive Windows API integration
+- **Professional Reporting**: Multi-format output (JSON, CSV, HTML) with an executive summary, weighted risk score, and severity-ranked findings
 
 ---
 
@@ -100,6 +109,21 @@ SysRecon is an enterprise-class security assessment platform designed to provide
 - Process hollowing detection through PE header validation
 - Shellcode signature matching using pattern analysis
 - Memory-resident threat identification
+
+#### Privilege Escalation Assessment (Phase 2)
+
+Read-only, host-local checks for the most common Windows local-privilege-escalation
+vectors. Every finding includes concrete remediation and a MITRE ATT&CK reference.
+
+- **Unquoted service paths** with writable intermediate directories (T1574.009)
+- **Weak service DACLs** — `SERVICE_CHANGE_CONFIG` / full control granted to low-privilege principals (T1543.003)
+- **World-writable service binaries / directories** that run as SYSTEM (T1574.010)
+- **`AlwaysInstallElevated`** enabled in both HKLM and HKCU (T1548.002)
+- **Writable `PATH` directories** enabling binary/DLL search-order hijacking (T1574.007)
+- **Autorun entries** pointing at user-writable targets (T1547.001)
+- **Cleartext autologon credentials** in the registry (T1552.002)
+- **UAC posture** — `EnableLUA`, `LocalAccountTokenFilterPolicy` (T1548.002 / T1550.002)
+- **Leftover unattend / sysprep answer files** that may contain credentials (T1552.001)
 
 ### Reporting & Intelligence
 
@@ -509,6 +533,7 @@ Leverages custom configuration profiles for compliance-specific assessments.
 | `--network` | Network Infrastructure | Connections, interfaces, shares, firewall rules |
 | `--registry` | Registry Analysis | Persistence keys, security policies, ACL analysis |
 | `--memory` | Memory Forensics | Memory scanning, injection detection, shellcode analysis |
+| `--privesc` | Privilege Escalation | Unquoted/weak-ACL services, writable binaries & PATH, AlwaysInstallElevated, UAC, stored credentials |
 | `--all` | All Modules | Comprehensive assessment (default if no modules specified) |
 
 ### Advanced Options
@@ -1249,7 +1274,7 @@ A:
 **Initial Release**
 
 #### Core Features
-- ✅ Six specialized security assessment modules (Accounts, Services, Processes, Network, Registry, Memory)
+- ✅ Seven specialized security assessment modules (Accounts, Services, Processes, Network, Registry, Memory, Privilege Escalation)
 - ✅ 25+ Windows API integrations for comprehensive system visibility
 - ✅ Multi-format reporting (JSON, CSV, HTML) with risk-based color coding
 - ✅ Professional Windows installer with GUI wizard

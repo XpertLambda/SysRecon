@@ -74,10 +74,11 @@ namespace SysRecon {
         Network,
         Registry,
         Memory,
+        PrivEsc,
         EventLogs,
         FileSystem
     };
-    
+
     // Scan results
     struct ScanResult {
         String module_name;
@@ -85,6 +86,9 @@ namespace SysRecon {
         String description;
         SecurityLevel risk_level;
         StringMap details;
+        // Phase 2: actionable output for pen-testers / defenders.
+        String remediation;              // How to fix / harden the finding.
+        String reference;                // MITRE ATT&CK technique, CVE, or doc link.
         std::chrono::system_clock::time_point timestamp;
     };
     
@@ -97,10 +101,10 @@ namespace SysRecon {
 #include "core/utils.h"
 
 // Version information
-#define SYSRECON_VERSION_MAJOR 1
+#define SYSRECON_VERSION_MAJOR 2
 #define SYSRECON_VERSION_MINOR 0
 #define SYSRECON_VERSION_PATCH 0
-#define SYSRECON_VERSION "1.0.0"
+#define SYSRECON_VERSION "2.0.0"
 #define SYSRECON_BUILD_DATE __DATE__
 #define SYSRECON_BUILD_TIME __TIME__
 

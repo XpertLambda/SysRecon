@@ -92,6 +92,39 @@ bool NetworkEnumerator::EnumerateConnections() {
         }
     }
     
+    // Report established sessions to external (public) hosts. During an
+    // assessment these highlight possible C2, exfiltration or unexpected egress.
+    for (auto& conn : connections_) {
+        if (conn.protocol != L"TCP") continue;
+        if (conn.state != L"ESTABLISHED") continue;
+        if (conn.remote_address.empty() || conn.remote_address == L"0.0.0.0") continue;
+        if (conn.remote_address.rfind(L"127.", 0) == 0) continue;
+        if (Core::Utils::IsPrivateIpAddress(conn.remote_address)) continue;
+
+        conn.process_name = GetProcessNameById(conn.process_id);
+        conn.risk_level = AssessConnectionRisk(conn);
+
+        ScanResult result;
+        result.module_name = L"Network";
+        result.item_name = L"External connection to " + conn.remote_address;
+        result.description = L"Established outbound connection to a public address.";
+        result.risk_level = (conn.risk_level > SecurityLevel::Low) ? conn.risk_level
+                                                                   : SecurityLevel::Low;
+        result.details[L"Remote"] = conn.remote_address + L":" + std::to_wstring(conn.remote_port);
+        result.details[L"Local"] = conn.local_address + L":" + std::to_wstring(conn.local_port);
+        result.details[L"PID"] = std::to_wstring(conn.process_id);
+        if (!conn.process_name.empty())
+            result.details[L"Process"] = conn.process_name;
+        if (result.risk_level >= SecurityLevel::High) {
+            result.remediation = L"Investigate the owning process and destination. If the "
+                L"egress is unexpected, isolate the host and block the destination at "
+                L"the firewall/proxy.";
+            result.reference = L"MITRE ATT&CK T1071 (Application Layer Protocol) / T1041 (Exfiltration)";
+        }
+        result.timestamp = std::chrono::system_clock::now();
+        scan_results_.push_back(result);
+    }
+
     SYSRECON_LOG_INFO(L"Enumerated " + std::to_wstring(connections_.size()) + L" connections");
     return true;
 #else
@@ -113,12 +146,39 @@ bool NetworkEnumerator::EnumerateListeningPorts() {
             listening_port.protocol = conn.protocol;
             listening_port.process_id = conn.process_id;
             listening_port.address = conn.local_address;
+            listening_port.process_name = GetProcessNameById(conn.process_id);
             listening_port.is_system_port = (conn.local_port < 1024);
-            listening_port.risk_level = SecurityLevel::Low;
+            listening_port.risk_level = AssessPortRisk(listening_port);
             listening_ports_.push_back(listening_port);
+
+            // A listening port is attack surface: report each one so the
+            // assessor can review exposure, with elevated risk for the
+            // well-known lateral-movement / remote-access services.
+            ScanResult result;
+            result.module_name = L"Network";
+            result.item_name = listening_port.protocol + L"/" + std::to_wstring(listening_port.port) +
+                               L" listening";
+            result.description = L"Service listening on " + listening_port.address + L":" +
+                                 std::to_wstring(listening_port.port) + L" (" +
+                                 listening_port.protocol + L")";
+            result.risk_level = listening_port.risk_level;
+            result.details[L"Port"] = std::to_wstring(listening_port.port);
+            result.details[L"Protocol"] = listening_port.protocol;
+            result.details[L"Bind Address"] = listening_port.address;
+            result.details[L"PID"] = std::to_wstring(listening_port.process_id);
+            if (!listening_port.process_name.empty())
+                result.details[L"Process"] = listening_port.process_name;
+            if (listening_port.risk_level >= SecurityLevel::Medium) {
+                result.remediation = L"Confirm this service is required and reachable only "
+                    L"from trusted networks. Restrict exposure via Windows Firewall; "
+                    L"disable SMBv1, enforce NLA on RDP (3389), and limit WinRM (5985/5986).";
+                result.reference = L"MITRE ATT&CK T1021 (Remote Services)";
+            }
+            result.timestamp = std::chrono::system_clock::now();
+            scan_results_.push_back(result);
         }
     }
-    
+
     SYSRECON_LOG_INFO(L"Found " + std::to_wstring(listening_ports_.size()) + L" listening ports");
     return true;
 }
@@ -455,6 +515,19 @@ SecurityLevel NetworkEnumerator::AssessShareRisk(const NetworkShare& share) {
     }
     
     return SecurityLevel::Low;
+}
+
+String NetworkEnumerator::GetProcessNameById(DWORD process_id) {
+    if (process_id == 0) return L"System Idle";
+    auto it = process_name_cache_.find(process_id);
+    if (it != process_name_cache_.end()) return it->second;
+#ifdef _WIN32
+    String name = Core::Utils::GetProcessName(process_id);
+#else
+    String name;
+#endif
+    process_name_cache_[process_id] = name;
+    return name;
 }
 
 // Stub implementations for unimplemented methods

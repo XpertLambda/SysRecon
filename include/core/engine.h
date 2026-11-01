@@ -7,6 +7,7 @@
 #include "../modules/network/network_enum.h"
 #include "../modules/registry/registry_analyzer.h"
 #include "../modules/memory/memory_analyzer.h"
+#include "../modules/privesc/privesc_analyzer.h"
 #include "../modules/reporting/report_generator.h"
 
 namespace SysRecon {
@@ -59,6 +60,7 @@ private:
     std::unique_ptr<Modules::NetworkEnumerator> network_enum_;
     std::unique_ptr<Modules::RegistryAnalyzer> registry_analyzer_;
     std::unique_ptr<Modules::MemoryAnalyzer> memory_analyzer_;
+    std::unique_ptr<Modules::PrivEscAnalyzer> privesc_analyzer_;
     std::unique_ptr<Modules::ReportGenerator> report_generator_;
     
     String output_directory_;

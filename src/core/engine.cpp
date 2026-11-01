@@ -89,7 +89,7 @@ bool ScanEngine::RunFullScan() {
     SYSRECON_LOG_INFO(L"Starting full system scan");
     
     try {
-        float step_progress = 100.0f / 6.0f;
+        float step_progress = 100.0f / 7.0f;
         float current_progress = 0.0f;
         
         if (IsModuleEnabled(ModuleType::Accounts)) {
@@ -139,7 +139,15 @@ bool ScanEngine::RunFullScan() {
             }
             current_progress += step_progress;
         }
-        
+
+        if (IsModuleEnabled(ModuleType::PrivEsc)) {
+            UpdateProgress(current_progress, L"Privilege Escalation");
+            if (privesc_analyzer_ && !RunModuleScan(ModuleType::PrivEsc)) {
+                SYSRECON_LOG_ERROR(L"Privilege-escalation assessment failed");
+            }
+            current_progress += step_progress;
+        }
+
         UpdateProgress(100.0f, L"Complete");
         
     } catch (const std::exception& e) {
@@ -173,7 +181,11 @@ bool ScanEngine::RunQuickScan() {
     if (IsModuleEnabled(ModuleType::Registry) && registry_analyzer_) {
         success &= registry_analyzer_->AnalyzeStartupKeys();
     }
-    
+
+    if (IsModuleEnabled(ModuleType::PrivEsc) && privesc_analyzer_) {
+        success &= privesc_analyzer_->RunAllChecks();
+    }
+
     return success;
 }
 
@@ -203,16 +215,24 @@ bool ScanEngine::RunModuleScan(ModuleType module) {
             
         case ModuleType::Network:
             if (network_enum_) {
-                return network_enum_->EnumerateConnections() &&
-                       network_enum_->EnumerateListeningPorts() &&
-                       network_enum_->EnumerateInterfaces();
+                bool ok = network_enum_->EnumerateConnections();
+                ok &= network_enum_->EnumerateListeningPorts();
+                ok &= network_enum_->EnumerateInterfaces();
+                // Shares and firewall posture are part of the network surface;
+                // they log but do not fail the module if unavailable.
+                network_enum_->EnumerateShares();
+                network_enum_->AnalyzeFirewall();
+                return ok;
             }
             break;
             
         case ModuleType::Registry:
             if (registry_analyzer_) {
-                return registry_analyzer_->AnalyzeStartupKeys() &&
-                       registry_analyzer_->AnalyzePolicies();
+                bool ok = registry_analyzer_->AnalyzeStartupKeys();
+                ok &= registry_analyzer_->AnalyzePolicies();
+                registry_analyzer_->AnalyzePermissions();
+                registry_analyzer_->ScanCustomKeys();
+                return ok;
             }
             break;
             
@@ -222,7 +242,13 @@ bool ScanEngine::RunModuleScan(ModuleType module) {
                        memory_analyzer_->DetectInjection();
             }
             break;
-            
+
+        case ModuleType::PrivEsc:
+            if (privesc_analyzer_) {
+                return privesc_analyzer_->RunAllChecks();
+            }
+            break;
+
         default:
             return false;
     }
@@ -239,7 +265,8 @@ void ScanEngine::Cleanup() {
     if (network_enum_) network_enum_->Cleanup();
     if (registry_analyzer_) registry_analyzer_->Cleanup();
     if (memory_analyzer_) memory_analyzer_->Cleanup();
-    
+    if (privesc_analyzer_) privesc_analyzer_->Cleanup();
+
     ClearResults();
 }
 
@@ -295,7 +322,13 @@ bool ScanEngine::ExportResults(const String& format, const String& filename) {
         scan_results_.insert(scan_results_.end(), module_results.begin(), module_results.end());
         SYSRECON_LOG_DEBUG(L"Collected " + std::to_wstring(module_results.size()) + L" memory results");
     }
-    
+
+    if (privesc_analyzer_) {
+        auto module_results = privesc_analyzer_->GetScanResults();
+        scan_results_.insert(scan_results_.end(), module_results.begin(), module_results.end());
+        SYSRECON_LOG_DEBUG(L"Collected " + std::to_wstring(module_results.size()) + L" privilege-escalation results");
+    }
+
     SYSRECON_LOG_INFO(L"Total scan results collected: " + std::to_wstring(scan_results_.size()));
     
     report_generator_->SetScanResults(scan_results_);
@@ -303,10 +336,14 @@ bool ScanEngine::ExportResults(const String& format, const String& filename) {
     // Set system info
     Modules::SystemInfo sys_info;
     sys_info.computer_name = Core::Utils::GetComputerName();
+    sys_info.domain_name = Core::Utils::GetDomainName();
     sys_info.os_version = Core::Utils::GetWindowsVersion();
     sys_info.architecture = Core::Utils::IsWow64Process() ? L"x86" : L"x64";
+    sys_info.processor = Core::Utils::GetProcessorName();
+    sys_info.memory_total = Core::Utils::FormatBytes(Core::Utils::GetTotalMemory());
+    sys_info.uptime = Core::Utils::GetUptime();
     sys_info.scan_time = std::chrono::system_clock::now();
-    sys_info.sysrecon_version = L"1.0.0";
+    sys_info.sysrecon_version = Core::Utils::Utf8ToWide(SYSRECON_VERSION);
     report_generator_->SetSystemInfo(sys_info);
     
     if (format == L"json") {
@@ -404,6 +441,16 @@ bool ScanEngine::InitializeModules() {
         }
     }
     
+    if (IsModuleEnabled(ModuleType::PrivEsc)) {
+        privesc_analyzer_ = std::make_unique<Modules::PrivEscAnalyzer>();
+        if (!privesc_analyzer_->Initialize()) {
+            SYSRECON_LOG_ERROR(L"Failed to initialize privilege-escalation analyzer module");
+            all_success = false;
+        } else {
+            SYSRECON_LOG_DEBUG(L"Privilege-escalation analyzer module initialized");
+        }
+    }
+
     // Always initialize report generator
     report_generator_ = std::make_unique<Modules::ReportGenerator>();
     SYSRECON_LOG_DEBUG(L"Report generator initialized");

@@ -734,6 +734,180 @@ bool DeleteFile(const String& path) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Phase 2 helpers: system facts + access-control (privilege-escalation) checks
+// ---------------------------------------------------------------------------
+
+// Parse a service ImagePath / command string into the executable path only.
+// Handles: quoted paths ("C:\Program Files\App\svc.exe" -k arg), rundll-style
+// hosts, and bare unquoted paths that contain spaces (first .exe token wins).
+String ExtractExecutablePath(const String& image_path) {
+    String p = Trim(image_path);
+    if (p.empty()) return L"";
+
+    // Strip a leading \??\ native path prefix if present.
+    if (p.rfind(L"\\??\\", 0) == 0) {
+        p = p.substr(4);
+    }
+
+    // Quoted executable: take everything inside the first pair of quotes.
+    if (p.front() == L'"') {
+        size_t end = p.find(L'"', 1);
+        if (end != String::npos) {
+            return p.substr(1, end - 1);
+        }
+        return p.substr(1);
+    }
+
+    // Unquoted: the real binary ends at the first ".exe" token boundary.
+    String lower = ToLower(p);
+    size_t exe = lower.find(L".exe");
+    while (exe != String::npos) {
+        size_t after = exe + 4;
+        // Accept when ".exe" is followed by end, a space, or a path separator.
+        if (after >= p.size() || p[after] == L' ' || p[after] == L'\t') {
+            return p.substr(0, after);
+        }
+        exe = lower.find(L".exe", after);
+    }
+
+    // No .exe token: cut at the first whitespace (best effort).
+    size_t sp = p.find_first_of(L" \t");
+    return (sp == String::npos) ? p : p.substr(0, sp);
+}
+
+#ifdef _WIN32
+String GetDomainName() {
+    wchar_t buffer[256];
+    DWORD size = sizeof(buffer) / sizeof(buffer[0]);
+    if (::GetComputerNameExW(ComputerNameDnsDomain, buffer, &size) && size > 0) {
+        return String(buffer, size);
+    }
+    return L"WORKGROUP";
+}
+
+String GetProcessorName() {
+    String name = ReadRegistryString(HKEY_LOCAL_MACHINE,
+        L"HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0", L"ProcessorNameString");
+    return name.empty() ? L"Unknown" : Trim(name);
+}
+
+size_t GetTotalMemory() {
+    MEMORYSTATUSEX ms;
+    ms.dwLength = sizeof(ms);
+    if (GlobalMemoryStatusEx(&ms)) {
+        return static_cast<size_t>(ms.ullTotalPhys);
+    }
+    return 0;
+}
+
+size_t GetAvailableMemory() {
+    MEMORYSTATUSEX ms;
+    ms.dwLength = sizeof(ms);
+    if (GlobalMemoryStatusEx(&ms)) {
+        return static_cast<size_t>(ms.ullAvailPhys);
+    }
+    return 0;
+}
+
+double GetMemoryUsagePercentage() {
+    MEMORYSTATUSEX ms;
+    ms.dwLength = sizeof(ms);
+    if (GlobalMemoryStatusEx(&ms)) {
+        return static_cast<double>(ms.dwMemoryLoad);
+    }
+    return 0.0;
+}
+
+String GetUptime() {
+    ULONGLONG ms = GetTickCount64();
+    ULONGLONG seconds = ms / 1000;
+    ULONGLONG days = seconds / 86400; seconds %= 86400;
+    ULONGLONG hours = seconds / 3600; seconds %= 3600;
+    ULONGLONG mins = seconds / 60;    seconds %= 60;
+    std::wstringstream ss;
+    if (days > 0) ss << days << L"d ";
+    ss << hours << L"h " << mins << L"m " << seconds << L"s";
+    return ss.str();
+}
+
+// Returns true when a well-known non-admin principal holds write/modify rights
+// to the object at `path` (file or directory). This is the primary signal for
+// binary-planting and service-binary-tampering privilege escalation.
+bool IsWritableByNonAdmin(const String& path, StringVector* principals) {
+    if (path.empty()) return false;
+
+    PSECURITY_DESCRIPTOR sd = nullptr;
+    PACL dacl = nullptr;
+    DWORD res = GetNamedSecurityInfoW(
+        path.c_str(), SE_FILE_OBJECT,
+        DACL_SECURITY_INFORMATION | OWNER_SECURITY_INFORMATION,
+        nullptr, nullptr, &dacl, nullptr, &sd);
+
+    if (res != ERROR_SUCCESS || dacl == nullptr) {
+        if (sd) LocalFree(sd);
+        return false;
+    }
+
+    // Build the SIDs we consider "non-admin" (low-privilege) principals.
+    struct NamedSid { PSID sid; const wchar_t* label; };
+    SID_IDENTIFIER_AUTHORITY nt = SECURITY_NT_AUTHORITY;
+    SID_IDENTIFIER_AUTHORITY world = SECURITY_WORLD_SID_AUTHORITY;
+
+    PSID everyone = nullptr, users = nullptr, authUsers = nullptr, interactive = nullptr;
+    AllocateAndInitializeSid(&world, 1, SECURITY_WORLD_RID, 0,0,0,0,0,0,0, &everyone);
+    AllocateAndInitializeSid(&nt, 2, SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_USERS, 0,0,0,0,0,0, &users);
+    AllocateAndInitializeSid(&nt, 1, SECURITY_AUTHENTICATED_USER_RID, 0,0,0,0,0,0,0, &authUsers);
+    AllocateAndInitializeSid(&nt, 1, SECURITY_INTERACTIVE_RID, 0,0,0,0,0,0,0, &interactive);
+
+    NamedSid watch[] = {
+        { everyone,    L"Everyone" },
+        { users,       L"BUILTIN\\Users" },
+        { authUsers,   L"Authenticated Users" },
+        { interactive, L"INTERACTIVE" },
+    };
+
+    // Rights that allow replacing/altering the target.
+    const DWORD dangerous = FILE_WRITE_DATA | FILE_APPEND_DATA |
+                            FILE_WRITE_ATTRIBUTES | FILE_WRITE_EA |
+                            WRITE_DAC | WRITE_OWNER | DELETE | GENERIC_WRITE | GENERIC_ALL;
+
+    bool writable = false;
+    for (DWORD i = 0; i < dacl->AceCount; ++i) {
+        LPVOID ace = nullptr;
+        if (!GetAce(dacl, i, &ace)) continue;
+        ACE_HEADER* hdr = reinterpret_cast<ACE_HEADER*>(ace);
+        if (hdr->AceType != ACCESS_ALLOWED_ACE_TYPE) continue;
+
+        ACCESS_ALLOWED_ACE* allow = reinterpret_cast<ACCESS_ALLOWED_ACE*>(ace);
+        PSID aceSid = reinterpret_cast<PSID>(&allow->SidStart);
+        if ((allow->Mask & dangerous) == 0) continue;
+
+        for (const auto& w : watch) {
+            if (w.sid && EqualSid(aceSid, w.sid)) {
+                writable = true;
+                if (principals) principals->push_back(w.label);
+            }
+        }
+    }
+
+    if (everyone) FreeSid(everyone);
+    if (users) FreeSid(users);
+    if (authUsers) FreeSid(authUsers);
+    if (interactive) FreeSid(interactive);
+    if (sd) LocalFree(sd);
+    return writable;
+}
+#else
+String GetDomainName() { return L"N/A"; }
+String GetProcessorName() { return L"Cross-compiled"; }
+size_t GetTotalMemory() { return 0; }
+size_t GetAvailableMemory() { return 0; }
+double GetMemoryUsagePercentage() { return 0.0; }
+String GetUptime() { return L"N/A"; }
+bool IsWritableByNonAdmin(const String&, StringVector*) { return false; }
+#endif
+
 }
 }
 }

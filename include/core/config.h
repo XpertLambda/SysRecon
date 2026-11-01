@@ -57,6 +57,14 @@ struct ScanConfig {
         bool scan_for_malware = true;
         size_t max_dump_size_mb = 100;
     } memory;
+
+    struct {
+        bool enabled = true;
+        bool check_services = true;      // unquoted paths, weak DACLs, writable binaries
+        bool check_registry = true;      // AlwaysInstallElevated, UAC, autologon
+        bool check_filesystem = true;    // writable PATH dirs, autorun targets
+        bool check_credentials = true;   // stored creds, unattend files
+    } privesc;
     
     // Output settings
     struct {

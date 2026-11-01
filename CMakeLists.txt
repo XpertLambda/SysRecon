@@ -54,6 +54,7 @@ set(SOURCES
     modules/network/network_enum.cpp
     modules/registry/registry_analyzer.cpp
     modules/memory/memory_analyzer.cpp
+    modules/privesc/privesc_analyzer.cpp
     modules/reporting/report_generator.cpp
 )
 
@@ -70,6 +71,7 @@ set(HEADERS
     include/modules/network/network_enum.h
     include/modules/registry/registry_analyzer.h
     include/modules/memory/memory_analyzer.h
+    include/modules/privesc/privesc_analyzer.h
     include/modules/reporting/report_generator.h
 )
 

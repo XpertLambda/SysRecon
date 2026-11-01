@@ -29,6 +29,7 @@ struct CommandLineOptions {
     bool network_only = false;
     bool registry_only = false;
     bool memory_only = false;
+    bool privesc_only = false;
     bool selective_scan = false;
 };
 
@@ -41,7 +42,7 @@ void PrintBanner() {
     std::wcout << L"███████║   ██║   ███████║██║  ██║███████╗╚██████╗╚██████╔╝██║ ╚████║\n";
     std::wcout << L"╚══════╝   ╚═╝   ╚══════╝╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚═════╝ ╚═╝  ╚═══╝\n";
     std::wcout << L"\n";
-    std::wcout << L"Windows Security Audit & Reconnaissance Tool v1.1.0\n";
+    std::wcout << L"Windows Security Audit & Reconnaissance Tool v2.0.0 (Phase 2)\n";
     std::wcout << L"Copyright (C) 2025 - XpertLambda\n";
     std::wcout << L"═══════════════════════════════════════════════════════════════════════\n\n";
 }
@@ -74,12 +75,16 @@ void PrintHelp() {
     std::wcout << L"  --network               Scan network connections and ports\n";
     std::wcout << L"  --registry              Scan registry for persistence\n";
     std::wcout << L"  --memory                Scan process memory (slow)\n";
+    std::wcout << L"  --privesc               Assess local privilege-escalation vectors\n";
+    std::wcout << L"                          (unquoted/weak services, writable binaries & PATH,\n";
+    std::wcout << L"                          AlwaysInstallElevated, UAC, stored credentials)\n";
     std::wcout << L"\n";
-    
+
     std::wcout << L"EXAMPLES:\n";
     std::wcout << L"  sysrecon.exe                          # Full scan with default settings\n";
     std::wcout << L"  sysrecon.exe --quick --verbose        # Quick verbose scan\n";
     std::wcout << L"  sysrecon.exe --accounts --services    # Scan only accounts and services\n";
+    std::wcout << L"  sysrecon.exe --privesc                # Privilege-escalation assessment only\n";
     std::wcout << L"  sysrecon.exe -f json -o ./output      # JSON report to ./output\n";
     std::wcout << L"  sysrecon.exe --stealth --quiet        # Stealthy silent scan\n";
     std::wcout << L"\n";
@@ -87,16 +92,17 @@ void PrintHelp() {
 
 void PrintVersion() {
     PrintBanner();
-    std::wcout << L"Version:      1.1.0\n";
+    std::wcout << L"Version:      2.0.0 (Phase 2)\n";
     std::wcout << L"Build Date:   " << __DATE__ << L" " << __TIME__ << L"\n";
     std::wcout << L"Target:       Windows x64\n";
     std::wcout << L"Compiler:     MinGW-w64 (C++20)\n";
     std::wcout << L"\n";
-    std::wcout << L"New in v1.1.0:\n";
-    std::wcout << L"  * Interactive menu mode for easy navigation\n";
-    std::wcout << L"  * Enhanced module selection interface\n";
-    std::wcout << L"  * Real-time configuration changes\n";
-    std::wcout << L"  * Improved user experience\n";
+    std::wcout << L"New in v2.0.0 (Phase 2 - Pentest Assessment):\n";
+    std::wcout << L"  * Privilege-escalation assessment module (--privesc)\n";
+    std::wcout << L"  * Unquoted/weak-ACL service & writable-binary detection\n";
+    std::wcout << L"  * AlwaysInstallElevated, UAC posture & stored-credential checks\n";
+    std::wcout << L"  * Every finding paired with remediation + MITRE ATT&CK reference\n";
+    std::wcout << L"  * Prioritised HTML report with executive summary & risk score\n";
     std::wcout << L"\n";
 }
 
@@ -205,8 +211,9 @@ void ShowModuleSelectionMenu(CommandLineOptions& options) {
     std::wcout << L"  4. Network Connections & Ports\n";
     std::wcout << L"  5. Registry Persistence Keys\n";
     std::wcout << L"  6. Process Memory Analysis (Slow)\n";
-    std::wcout << L"  7. Select All Modules\n";
-    std::wcout << L"  8. Start Scan with Selected Modules\n";
+    std::wcout << L"  7. Privilege Escalation Assessment\n";
+    std::wcout << L"  8. Select All Modules\n";
+    std::wcout << L"  9. Start Scan with Selected Modules\n";
     std::wcout << L"  0. Back to Main Menu\n";
     std::wcout << L"\n";
     std::wcout << L"══════════════════════════════════════════════════════════════════════\n";
@@ -222,6 +229,7 @@ void ShowModuleSelectionMenu(CommandLineOptions& options) {
         if (options.network_only) { std::wcout << (first ? L"" : L", ") << L"Network"; first = false; }
         if (options.registry_only) { std::wcout << (first ? L"" : L", ") << L"Registry"; first = false; }
         if (options.memory_only) { std::wcout << (first ? L"" : L", ") << L"Memory"; first = false; }
+        if (options.privesc_only) { std::wcout << (first ? L"" : L", ") << L"PrivEsc"; first = false; }
     }
     std::wcout << L"\n";
 }
@@ -403,7 +411,13 @@ bool ParseArguments(int argc, wchar_t* argv[], CommandLineOptions& options) {
             options.selective_scan = true;
             continue;
         }
-        
+
+        if (arg == L"--privesc") {
+            options.privesc_only = true;
+            options.selective_scan = true;
+            continue;
+        }
+
         // Unknown option
         std::wcerr << L"Error: Unknown option '" << arg << L"'\n";
         std::wcerr << L"Use --help for usage information\n";
@@ -447,11 +461,16 @@ int RunScan(CommandLineOptions& options) {
     // Load configuration if file exists
     if (Core::Utils::FileExists(options.config_file)) {
         Logger::Instance().Info(L"Loading configuration from: " + options.config_file);
-        // TODO: Load config into engine
+        engine.LoadConfig(options.config_file);
     } else if (options.config_file != L"config.json") {
         Logger::Instance().Warning(L"Configuration file not found: " + options.config_file);
     }
-    
+
+    // Apply stealth mode to the engine (suppresses console logging)
+    if (options.stealth) {
+        engine.SetStealthMode(true);
+    }
+
     // Initialize engine
     if (!engine.Initialize()) {
         Logger::Instance().Error(L"Failed to initialize scan engine");
@@ -467,7 +486,8 @@ int RunScan(CommandLineOptions& options) {
         engine.DisableModule(ModuleType::Network);
         engine.DisableModule(ModuleType::Registry);
         engine.DisableModule(ModuleType::Memory);
-        
+        engine.DisableModule(ModuleType::PrivEsc);
+
         // Enable only selected modules
         if (options.accounts_only) {
             engine.EnableModule(ModuleType::Accounts);
@@ -493,14 +513,25 @@ int RunScan(CommandLineOptions& options) {
             engine.EnableModule(ModuleType::Memory);
             Logger::Instance().Debug(L"Enabled Memory module");
         }
+        if (options.privesc_only) {
+            engine.EnableModule(ModuleType::PrivEsc);
+            Logger::Instance().Debug(L"Enabled Privilege Escalation module");
+        }
     } else {
-        // Full scan - ensure all modules are enabled
-        engine.EnableModule(ModuleType::Accounts);
-        engine.EnableModule(ModuleType::Services);
-        engine.EnableModule(ModuleType::Processes);
-        engine.EnableModule(ModuleType::Network);
-        engine.EnableModule(ModuleType::Registry);
-        engine.EnableModule(ModuleType::Memory);
+        // Full scan - enable modules according to the loaded configuration
+        // (CLI selective flags above take precedence over config when present).
+        ConfigManager& cfg = ConfigManager::Instance();
+        auto applyModule = [&](ModuleType m) {
+            if (cfg.IsModuleEnabled(m)) engine.EnableModule(m);
+            else engine.DisableModule(m);
+        };
+        applyModule(ModuleType::Accounts);
+        applyModule(ModuleType::Services);
+        applyModule(ModuleType::Processes);
+        applyModule(ModuleType::Network);
+        applyModule(ModuleType::Registry);
+        applyModule(ModuleType::Memory);
+        applyModule(ModuleType::PrivEsc);
     }
     
     // Display scan information
@@ -523,6 +554,7 @@ int RunScan(CommandLineOptions& options) {
             if (options.network_only) std::wcout << L"  * Network Connections\n";
             if (options.registry_only) std::wcout << L"  * Registry Keys\n";
             if (options.memory_only) std::wcout << L"  * Process Memory\n";
+            if (options.privesc_only) std::wcout << L"  * Privilege Escalation Assessment\n";
             std::wcout << L"\n";
         } else {
             std::wcout << L"  [FULL] Full system scan (all modules)\n\n";
@@ -530,10 +562,10 @@ int RunScan(CommandLineOptions& options) {
     }
     
     Logger::Instance().Info(L"Starting scan...");
-    
-    // Run the scan
-    bool success = engine.RunFullScan();
-    
+
+    // Run the scan (quick mode runs the essential-checks subset)
+    bool success = options.quick ? engine.RunQuickScan() : engine.RunFullScan();
+
     if (!success) {
         Logger::Instance().Error(L"Scan failed");
         return 1;
@@ -630,8 +662,8 @@ int InteractiveMode() {
                 bool selecting = true;
                 while (selecting) {
                     ShowModuleSelectionMenu(options);
-                    int modChoice = GetMenuChoice(0, 8);
-                    
+                    int modChoice = GetMenuChoice(0, 9);
+
                     switch (modChoice) {
                         case 1:
                             options.accounts_only = !options.accounts_only;
@@ -658,15 +690,20 @@ int InteractiveMode() {
                             options.selective_scan = true;
                             break;
                         case 7:
+                            options.privesc_only = !options.privesc_only;
+                            options.selective_scan = true;
+                            break;
+                        case 8:
                             options.accounts_only = true;
                             options.services_only = true;
                             options.processes_only = true;
                             options.network_only = true;
                             options.registry_only = true;
                             options.memory_only = true;
+                            options.privesc_only = true;
                             options.selective_scan = true;
                             break;
-                        case 8:
+                        case 9:
                             if (options.selective_scan) {
                                 std::wcout << L"\n[*] Starting selective scan...\n";
                                 WaitForKey();

@@ -1,4 +1,6 @@
 #include "../../include/modules/processes/process_enum.h"
+#include "../../include/core/utils.h"
+#include "../../include/core/whitelist.h"
 
 namespace SysRecon {
 namespace Modules {
@@ -65,12 +67,13 @@ bool ProcessEnumerator::EnumerateProcesses() {
             }
             
             processes_.push_back(proc);
-            
+            AnalyzeProcessInfo(proc);
+
         } while (Process32NextW(snapshot, &entry));
     }
-    
+
     CloseHandle(snapshot);
-    
+
     SYSRECON_LOG_INFO(L"Enumerated " + std::to_wstring(processes_.size()) + L" processes");
     return true;
 #else
@@ -130,6 +133,62 @@ bool ProcessEnumerator::DetectInjection() {
     
     SYSRECON_LOG_INFO(L"Detecting code injection...");
     return true;
+}
+
+void ProcessEnumerator::AnalyzeProcessInfo(const ProcessInfo& process) {
+    if (process.executable_path.empty()) {
+        return; // Protected/system process we could not open; nothing to assess.
+    }
+
+    String lower = Core::Utils::ToLower(process.executable_path);
+
+    // Flag binaries running from user-writable / temporary locations, which is a
+    // common staging pattern for malware and attacker tooling on an engagement.
+    struct Marker { const wchar_t* needle; const wchar_t* label; };
+    const Marker markers[] = {
+        { L"\\temp\\",           L"Temp directory" },
+        { L"\\appdata\\local\\temp\\", L"AppData Local Temp" },
+        { L"\\appdata\\",        L"AppData" },
+        { L"\\downloads\\",      L"Downloads folder" },
+        { L"\\public\\",         L"Public user folder" },
+        { L"\\programdata\\",    L"ProgramData" },
+        { L"\\$recycle.bin\\",   L"Recycle Bin" },
+    };
+
+    const wchar_t* matched = nullptr;
+    for (const auto& m : markers) {
+        if (lower.find(m.needle) != String::npos) { matched = m.label; break; }
+    }
+    if (!matched) return;
+
+#ifdef _WIN32
+    // Confirm the binary itself is writable by a non-admin for higher confidence.
+    StringVector who;
+    bool writable = Core::Utils::IsWritableByNonAdmin(process.executable_path, &who);
+#else
+    bool writable = false;
+    StringVector who;
+#endif
+
+    ScanResult result;
+    result.module_name = L"Processes";
+    result.item_name = process.process_name;
+    result.description = L"Process is running from a user-writable / transient location (" +
+                         String(matched) + L"), which is uncommon for legitimate "
+                         L"system software and warrants review.";
+    result.risk_level = writable ? SecurityLevel::High : SecurityLevel::Medium;
+    result.details[L"PID"] = std::to_wstring(process.process_id);
+    result.details[L"Path"] = process.executable_path;
+    result.details[L"Location"] = matched;
+    if (writable) {
+        result.details[L"Writable By"] = Core::Utils::Join(who, L", ");
+    }
+    result.remediation = L"Verify the process is expected. Confirm the publisher/"
+        L"digital signature, correlate with change tickets, and remove or quarantine "
+        L"the binary if unrecognised. Restrict write access to the hosting directory.";
+    result.reference = L"MITRE ATT&CK T1036 (Masquerading) / T1074 (Data Staged)";
+    result.timestamp = std::chrono::system_clock::now();
+    scan_results_.push_back(result);
 }
 
 void ProcessEnumerator::Cleanup() {

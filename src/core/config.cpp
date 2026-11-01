@@ -104,6 +104,15 @@ bool ConfigManager::LoadFromFile(const String& filename) {
                 if (mem.contains("scan_for_malware")) config_.memory.scan_for_malware = mem["scan_for_malware"];
                 if (mem.contains("max_dump_size_mb")) config_.memory.max_dump_size_mb = mem["max_dump_size_mb"];
             }
+
+            if (modules.contains("privesc")) {
+                auto& pe = modules["privesc"];
+                if (pe.contains("enabled")) config_.privesc.enabled = pe["enabled"];
+                if (pe.contains("check_services")) config_.privesc.check_services = pe["check_services"];
+                if (pe.contains("check_registry")) config_.privesc.check_registry = pe["check_registry"];
+                if (pe.contains("check_filesystem")) config_.privesc.check_filesystem = pe["check_filesystem"];
+                if (pe.contains("check_credentials")) config_.privesc.check_credentials = pe["check_credentials"];
+            }
         }
         
         // Parse output settings
@@ -195,7 +204,13 @@ bool ConfigManager::SaveToFile(const String& filename) const {
         j["modules"]["memory"]["analyze_heap"] = config_.memory.analyze_heap;
         j["modules"]["memory"]["scan_for_malware"] = config_.memory.scan_for_malware;
         j["modules"]["memory"]["max_dump_size_mb"] = config_.memory.max_dump_size_mb;
-        
+
+        j["modules"]["privesc"]["enabled"] = config_.privesc.enabled;
+        j["modules"]["privesc"]["check_services"] = config_.privesc.check_services;
+        j["modules"]["privesc"]["check_registry"] = config_.privesc.check_registry;
+        j["modules"]["privesc"]["check_filesystem"] = config_.privesc.check_filesystem;
+        j["modules"]["privesc"]["check_credentials"] = config_.privesc.check_credentials;
+
         // Output settings
         j["output"]["output_directory"] = Utils::WideToUtf8(config_.output.output_directory);
         j["output"]["generate_json"] = config_.output.generate_json;
@@ -268,6 +283,12 @@ bool ConfigManager::LoadDefaults() {
     config_.memory.analyze_heap = false;
     config_.memory.scan_for_malware = true;
     config_.memory.max_dump_size_mb = 100;
+
+    config_.privesc.enabled = true;
+    config_.privesc.check_services = true;
+    config_.privesc.check_registry = true;
+    config_.privesc.check_filesystem = true;
+    config_.privesc.check_credentials = true;
     
     config_.output.output_directory = L"./reports";
     config_.output.generate_json = true;
@@ -296,6 +317,8 @@ bool ConfigManager::IsModuleEnabled(ModuleType module) const {
             return config_.registry.enabled;
         case ModuleType::Memory:
             return config_.memory.enabled;
+        case ModuleType::PrivEsc:
+            return config_.privesc.enabled;
         default:
             return false;
     }
@@ -325,7 +348,8 @@ bool ConfigManager::ValidateConfig() const {
                              config_.processes.enabled ||
                              config_.network.enabled ||
                              config_.registry.enabled ||
-                             config_.memory.enabled;
+                             config_.memory.enabled ||
+                             config_.privesc.enabled;
     
     if (!any_module_enabled) {
         validation_errors_.push_back(L"At least one module must be enabled");

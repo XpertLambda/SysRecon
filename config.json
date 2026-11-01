@@ -49,6 +49,13 @@
             "analyze_heap": false,
             "scan_for_malware": true,
             "max_dump_size_mb": 100
+        },
+        "privesc": {
+            "enabled": true,
+            "check_services": true,
+            "check_registry": true,
+            "check_filesystem": true,
+            "check_credentials": true
         }
     },
     "output": {

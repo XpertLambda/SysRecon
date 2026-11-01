@@ -42,8 +42,19 @@ String GetWindowsDirectory();
 String GetTempDirectory();
 String GetCurrentUserName();
 String GetComputerName();
+String GetDomainName();
+String GetProcessorName();
 String GetWindowsVersion();
 bool IsWow64Process();
+
+// Access-control helpers (Phase 2 privilege-escalation assessment).
+// Reports whether a file or directory grants write/modify access to a
+// non-administrative principal (Everyone, Authenticated Users, Users, or the
+// interactive/current user). Returns the matching principals via out-param.
+bool IsWritableByNonAdmin(const String& path, StringVector* principals = nullptr);
+// Splits a service ImagePath into the executable portion and its arguments,
+// honouring quoting. Returns the resolved on-disk executable path.
+String ExtractExecutablePath(const String& image_path);
 #endif
 
 String IpAddressToString(uint32_t ip);
