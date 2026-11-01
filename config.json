@@ -39,7 +39,11 @@
             "check_services": true,
             "check_registry": true,
             "check_filesystem": true,
-            "check_credentials": true
+            "check_credentials": true,
+            "verify_signatures": true,
+            "check_tokens": true,
+            "check_scheduled_tasks": true,
+            "check_patches": true
         }
     },
     "output": {

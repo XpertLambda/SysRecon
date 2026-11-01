@@ -63,6 +63,10 @@ struct ScanConfig {
         bool check_registry = true;      // AlwaysInstallElevated, UAC, autologon
         bool check_filesystem = true;    // writable PATH dirs, autorun targets
         bool check_credentials = true;   // stored creds, unattend files
+        bool verify_signatures = true;   // Authenticode + SHA-256 on flagged binaries
+        bool check_tokens = true;        // current-token integrity / dangerous privileges
+        bool check_scheduled_tasks = true; // SYSTEM tasks with a writable binary
+        bool check_patches = true;       // installed hotfixes vs known-LPE table
     } privesc;
     
     // Output settings

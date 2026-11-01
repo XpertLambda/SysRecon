@@ -4,6 +4,12 @@
 #include "../../include/core/utils.h"
 #include "../../include/core/text_utils.h"
 
+#include <wintrust.h>
+#include <softpub.h>
+#include <wincrypt.h>
+#include <wbemidl.h>
+#include <objbase.h>
+
 namespace SysRecon {
 namespace Core {
 namespace Utils {
@@ -499,6 +505,266 @@ bool IsWritableByNonAdmin(const String& path, StringVector* principals) {
     if (interactive) FreeSid(interactive);
     if (sd) LocalFree(sd);
     return writable;
+}
+
+namespace {
+// Subject CN of the file's signing certificate, or empty. Pulled from the
+// embedded signature via CryptQueryObject; absence is not an error here (the
+// trust result from WinVerifyTrust is what decides status).
+String ExtractSigner(const String& file_path) {
+    HCERTSTORE store = nullptr;
+    HCRYPTMSG msg = nullptr;
+    if (!CryptQueryObject(CERT_QUERY_OBJECT_FILE, file_path.c_str(),
+                          CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED,
+                          CERT_QUERY_FORMAT_FLAG_BINARY, 0, nullptr, nullptr, nullptr,
+                          &store, &msg, nullptr)) {
+        return L"";
+    }
+
+    String signer;
+    DWORD signer_size = 0;
+    if (msg && CryptMsgGetParam(msg, CMSG_SIGNER_INFO_PARAM, 0, nullptr, &signer_size) && signer_size) {
+        std::vector<BYTE> buf(signer_size);
+        if (CryptMsgGetParam(msg, CMSG_SIGNER_INFO_PARAM, 0, buf.data(), &signer_size)) {
+            auto* si = reinterpret_cast<CMSG_SIGNER_INFO*>(buf.data());
+            CERT_INFO ci{};
+            ci.Issuer = si->Issuer;
+            ci.SerialNumber = si->SerialNumber;
+            PCCERT_CONTEXT cert = CertFindCertificateInStore(
+                store, X509_ASN_ENCODING | PKCS_7_ASN_ENCODING, 0,
+                CERT_FIND_SUBJECT_CERT, &ci, nullptr);
+            if (cert) {
+                DWORD cn = CertGetNameStringW(cert, CERT_NAME_SIMPLE_DISPLAY_TYPE, 0, nullptr, nullptr, 0);
+                if (cn > 1) {
+                    std::vector<wchar_t> name(cn);
+                    CertGetNameStringW(cert, CERT_NAME_SIMPLE_DISPLAY_TYPE, 0, nullptr, name.data(), cn);
+                    signer = name.data();
+                }
+                CertFreeCertificateContext(cert);
+            }
+        }
+    }
+    if (msg) CryptMsgClose(msg);
+    if (store) CertCloseStore(store, 0);
+    return signer;
+}
+}  // namespace
+
+SignatureInfo VerifySignature(const String& file_path) {
+    SignatureInfo info;
+    if (file_path.empty() || !FileExists(file_path)) {
+        info.status = SignatureStatus::Error;
+        info.status_text = L"file not found";
+        return info;
+    }
+
+    WINTRUST_FILE_INFO file_info{};
+    file_info.cbStruct = sizeof(file_info);
+    file_info.pcwszFilePath = file_path.c_str();
+
+    WINTRUST_DATA wd{};
+    wd.cbStruct = sizeof(wd);
+    wd.dwUIChoice = WTD_UI_NONE;
+    wd.fdwRevocationChecks = WTD_REVOKE_NONE;  // offline: no network revocation
+    wd.dwUnionChoice = WTD_CHOICE_FILE;
+    wd.pFile = &file_info;
+    wd.dwStateAction = WTD_STATEACTION_VERIFY;
+    wd.dwProvFlags = WTD_SAFER_FLAG | WTD_CACHE_ONLY_URL_RETRIEVAL;
+
+    GUID action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+    LONG rc = WinVerifyTrust(static_cast<HWND>(INVALID_HANDLE_VALUE), &action, &wd);
+
+    wd.dwStateAction = WTD_STATEACTION_CLOSE;
+    WinVerifyTrust(static_cast<HWND>(INVALID_HANDLE_VALUE), &action, &wd);
+
+    switch (rc) {
+        case ERROR_SUCCESS:
+            info.status = SignatureStatus::Trusted;
+            info.status_text = L"valid Authenticode signature";
+            info.signer = ExtractSigner(file_path);
+            break;
+        case TRUST_E_NOSIGNATURE:
+            info.status = SignatureStatus::Unsigned;
+            info.status_text = L"no Authenticode signature";
+            break;
+        case TRUST_E_EXPLICIT_DISTRUST:
+        case TRUST_E_SUBJECT_NOT_TRUSTED:
+        case CERT_E_UNTRUSTEDROOT:
+        case CERT_E_CHAINING:
+        case CERT_E_EXPIRED:
+            info.status = SignatureStatus::Untrusted;
+            info.status_text = L"signature present but not trusted";
+            info.signer = ExtractSigner(file_path);
+            break;
+        default:
+            info.status = SignatureStatus::Untrusted;
+            info.status_text = L"signature verification failed";
+            info.signer = ExtractSigner(file_path);
+            break;
+    }
+    return info;
+}
+
+String GetIntegrityLevel() {
+    HANDLE token = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return L"Unknown";
+
+    DWORD size = 0;
+    GetTokenInformation(token, TokenIntegrityLevel, nullptr, 0, &size);
+    if (size == 0) { CloseHandle(token); return L"Unknown"; }
+
+    std::vector<BYTE> buf(size);
+    String level = L"Unknown";
+    if (GetTokenInformation(token, TokenIntegrityLevel, buf.data(), size, &size)) {
+        auto* til = reinterpret_cast<TOKEN_MANDATORY_LABEL*>(buf.data());
+        DWORD rid = *GetSidSubAuthority(
+            til->Label.Sid, static_cast<DWORD>(*GetSidSubAuthorityCount(til->Label.Sid) - 1));
+        if (rid >= SECURITY_MANDATORY_SYSTEM_RID)        level = L"System";
+        else if (rid >= SECURITY_MANDATORY_HIGH_RID)     level = L"High";
+        else if (rid >= SECURITY_MANDATORY_MEDIUM_RID)   level = L"Medium";
+        else if (rid >= SECURITY_MANDATORY_LOW_RID)      level = L"Low";
+        else                                             level = L"Untrusted";
+    }
+    CloseHandle(token);
+    return level;
+}
+
+bool IsTokenElevated() {
+    HANDLE token = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return false;
+    TOKEN_ELEVATION elev{};
+    DWORD size = sizeof(elev);
+    bool elevated = false;
+    if (GetTokenInformation(token, TokenElevation, &elev, size, &size)) {
+        elevated = elev.TokenIsElevated != 0;
+    }
+    CloseHandle(token);
+    return elevated;
+}
+
+std::vector<std::pair<String, bool>> GetTokenPrivileges() {
+    std::vector<std::pair<String, bool>> result;
+    HANDLE token = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return result;
+
+    DWORD size = 0;
+    GetTokenInformation(token, TokenPrivileges, nullptr, 0, &size);
+    if (size == 0) { CloseHandle(token); return result; }
+
+    std::vector<BYTE> buf(size);
+    if (GetTokenInformation(token, TokenPrivileges, buf.data(), size, &size)) {
+        auto* tp = reinterpret_cast<TOKEN_PRIVILEGES*>(buf.data());
+        for (DWORD i = 0; i < tp->PrivilegeCount; ++i) {
+            const LUID_AND_ATTRIBUTES& la = tp->Privileges[i];
+            DWORD name_len = 0;
+            LUID luid = la.Luid;
+            LookupPrivilegeNameW(nullptr, &luid, nullptr, &name_len);
+            if (name_len == 0) continue;
+            std::vector<wchar_t> name(name_len + 1);
+            if (LookupPrivilegeNameW(nullptr, &luid, name.data(), &name_len)) {
+                bool enabled = (la.Attributes & SE_PRIVILEGE_ENABLED) != 0 ||
+                               (la.Attributes & SE_PRIVILEGE_ENABLED_BY_DEFAULT) != 0;
+                result.emplace_back(String(name.data()), enabled);
+            }
+        }
+    }
+    CloseHandle(token);
+    return result;
+}
+
+StringVector GetTokenGroupNames() {
+    StringVector result;
+    HANDLE token = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return result;
+
+    DWORD size = 0;
+    GetTokenInformation(token, TokenGroups, nullptr, 0, &size);
+    if (size == 0) { CloseHandle(token); return result; }
+
+    std::vector<BYTE> buf(size);
+    if (GetTokenInformation(token, TokenGroups, buf.data(), size, &size)) {
+        auto* groups = reinterpret_cast<TOKEN_GROUPS*>(buf.data());
+        for (DWORD i = 0; i < groups->GroupCount; ++i) {
+            const SID_AND_ATTRIBUTES& g = groups->Groups[i];
+            if (g.Attributes & SE_GROUP_LOGON_ID) continue;
+            wchar_t name[256]; DWORD name_len = 256;
+            wchar_t domain[256]; DWORD domain_len = 256;
+            SID_NAME_USE use;
+            if (LookupAccountSidW(nullptr, g.Sid, name, &name_len, domain, &domain_len, &use)) {
+                String full = (domain_len > 0) ? String(domain) + L"\\" + name : String(name);
+                result.push_back(full);
+            }
+        }
+    }
+    CloseHandle(token);
+    return result;
+}
+
+std::set<String> GetInstalledHotfixes() {
+    std::set<String> kbs;
+
+    HRESULT init = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    const bool need_uninit = (init == S_OK || init == S_FALSE);
+    if (init != S_OK && init != S_FALSE && init != RPC_E_CHANGED_MODE) {
+        return kbs;
+    }
+    // Best-effort; RPC_E_TOO_LATE means it was already set for the process.
+    CoInitializeSecurity(nullptr, -1, nullptr, nullptr, RPC_C_AUTHN_LEVEL_DEFAULT,
+                         RPC_C_IMP_LEVEL_IMPERSONATE, nullptr, EOAC_NONE, nullptr);
+
+    IWbemLocator* locator = nullptr;
+    if (SUCCEEDED(CoCreateInstance(CLSID_WbemLocator, nullptr, CLSCTX_INPROC_SERVER,
+                                   IID_IWbemLocator, reinterpret_cast<void**>(&locator))) && locator) {
+        IWbemServices* services = nullptr;
+        BSTR ns = SysAllocString(L"ROOT\\CIMV2");
+        if (SUCCEEDED(locator->ConnectServer(ns, nullptr, nullptr, nullptr, 0, nullptr, nullptr, &services))
+            && services) {
+            CoSetProxyBlanket(services, RPC_C_AUTHN_WINNT, RPC_C_AUTHZ_NONE, nullptr,
+                              RPC_C_AUTHN_LEVEL_CALL, RPC_C_IMP_LEVEL_IMPERSONATE, nullptr, EOAC_NONE);
+            IEnumWbemClassObject* en = nullptr;
+            BSTR lang = SysAllocString(L"WQL");
+            BSTR query = SysAllocString(L"SELECT HotFixID FROM Win32_QuickFixEngineering");
+            if (SUCCEEDED(services->ExecQuery(lang, query,
+                    WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY, nullptr, &en)) && en) {
+                IWbemClassObject* obj = nullptr;
+                ULONG returned = 0;
+                while (en->Next(static_cast<LONG>(WBEM_INFINITE), 1, &obj, &returned) == S_OK && returned) {
+                    VARIANT v; VariantInit(&v);
+                    if (SUCCEEDED(obj->Get(L"HotFixID", 0, &v, nullptr, nullptr)) &&
+                        v.vt == VT_BSTR && v.bstrVal) {
+                        kbs.insert(String(v.bstrVal, SysStringLen(v.bstrVal)));
+                    }
+                    VariantClear(&v);
+                    obj->Release();
+                    obj = nullptr;
+                }
+                en->Release();
+            }
+            SysFreeString(lang); SysFreeString(query);
+            services->Release();
+        }
+        SysFreeString(ns);
+        locator->Release();
+    }
+
+    if (need_uninit) CoUninitialize();
+    return kbs;
+}
+
+uint32_t GetOsBuildNumber() {
+    uint32_t build = 0;
+    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    if (ntdll) {
+        typedef LONG (WINAPI* RtlGetVersionPtr)(PRTL_OSVERSIONINFOW);
+        auto rtl = reinterpret_cast<RtlGetVersionPtr>(
+            reinterpret_cast<void*>(GetProcAddress(ntdll, "RtlGetVersion")));
+        if (rtl) {
+            RTL_OSVERSIONINFOW vi{};
+            vi.dwOSVersionInfoSize = sizeof(vi);
+            if (rtl(&vi) == 0) build = vi.dwBuildNumber;
+        }
+    }
+    return build;
 }
 
 }

@@ -4,6 +4,37 @@ All notable changes to SysRecon are documented here.
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-11-01
+
+### Added — Tier 1 local-privilege-escalation checks (`--privesc`)
+
+- **Current security context** (`check_tokens`): reports the process integrity
+  level and elevation, and raises a finding for each sensitive privilege held
+  by the token — `SeImpersonate`/`SeAssignPrimaryToken` (Potato family, T1134),
+  `SeBackup`/`SeRestore`/`SeTakeOwnership`/`SeDebug`/`SeLoadDriver`/
+  `SeManageVolume`/`SeTcb` — each with its abuse path and remediation.
+- **Authenticode verification + SHA-256** (`verify_signatures`): writable
+  service-binary, autorun, scheduled-task and extended-autostart findings now
+  carry the binary's signature status (signed/unsigned/untrusted, with signer)
+  and SHA-256, for triage and IOC lookups. `Utils::VerifySignature`
+  (`WinVerifyTrust`) + a portable, unit-tested `Utils::CalculateSHA256`.
+- **Scheduled tasks** (`check_scheduled_tasks`): enumerates tasks via the Task
+  Scheduler COM API and flags any that run with highest/SYSTEM rights whose
+  action binary or its directory is writable by a non-admin (T1053.005).
+- **Extended autostart / DLL-hijack surface**: Winlogon `Userinit`/`Shell`/
+  `Taskman`, `AppInit_DLLs` (+ WOW6432Node) and IFEO `Debugger` entries whose
+  target is writable by a non-admin (T1547.004 / T1546.010 / T1546.012).
+- **Missing-patch hints** (`check_patches`): enumerates installed hotfixes via
+  WMI (`Win32_QuickFixEngineering`) and flags well-known LPE CVEs
+  (PrintNightmare, HiveNightmare/SeriousSAM, CVE-2021-1732/2022-21882,
+  Zerologon) whose fixing KB is absent. Marked "potential / verify" because
+  cumulative updates can supersede the listed KBs. The comparison table is a
+  portable, unit-tested `Utils::MissingLpePatchHints`.
+
+New `modules.privesc.*` config flags: `verify_signatures`, `check_tokens`,
+`check_scheduled_tasks`, `check_patches`. New unit tests cover the SHA-256 NIST
+vectors, `ExtractExecutablePath`, and the patch-hint table (103 tests total).
+
 ## [1.3.0] — 2026-11-01
 
 ### Added

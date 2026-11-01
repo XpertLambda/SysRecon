@@ -118,6 +118,21 @@ under `modules.privesc.*` in `config.json`.
 - Cleartext autologon credentials in the registry (T1552.002)
 - UAC posture: `EnableLUA`, `LocalAccountTokenFilterPolicy` (T1548.002 / T1550.002)
 - Leftover unattended-install answer files (T1552.001)
+- **Current security context**: process integrity level, elevation, and each
+  sensitive token privilege held — `SeImpersonate`/`SeAssignPrimaryToken`
+  (Potato family), `SeBackup`/`SeRestore`/`SeTakeOwnership`/`SeDebug`/
+  `SeLoadDriver`/`SeManageVolume`/`SeTcb` (T1134)
+- **Scheduled tasks** running as highest/SYSTEM with a non-admin-writable binary
+  (T1053.005)
+- **Extended autostart / DLL-hijack**: Winlogon `Userinit`/`Shell`/`Taskman`,
+  `AppInit_DLLs`, IFEO `Debugger` with writable targets (T1547.004 / T1546.010 / T1546.012)
+- **Missing-patch hints**: installed hotfixes (WMI) vs a curated table of
+  well-known LPE CVEs — PrintNightmare, HiveNightmare/SeriousSAM, Win32k
+  (CVE-2021-1732 / CVE-2022-21882), Zerologon (T1068)
+
+Writable binaries flagged by the service, autorun, scheduled-task and
+autostart checks are annotated with their **Authenticode signature status**
+(signed / unsigned / untrusted, with signer) and **SHA-256**.
 
 > SysRecon never exploits a finding or extracts a secret: credential checks
 > report presence and location only.

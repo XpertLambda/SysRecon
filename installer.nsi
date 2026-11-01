@@ -25,7 +25,7 @@
 
 ; Application Information
 !define PRODUCT_NAME "SysRecon"
-!define PRODUCT_VERSION "1.3.0"
+!define PRODUCT_VERSION "1.4.0"
 !define PRODUCT_PUBLISHER "XpertLambda"
 !define PRODUCT_WEB_SITE "https://github.com/XpertLambda/SysRecon"
 !define PRODUCT_DESCRIPTION "Windows Security Audit & Reconnaissance Tool"

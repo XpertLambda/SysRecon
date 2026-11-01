@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(SysRecon VERSION 1.3.0 LANGUAGES CXX)
+project(SysRecon VERSION 1.4.0 LANGUAGES CXX)
 
 # Set C++ standard
 set(CMAKE_CXX_STANDARD 20)
@@ -122,6 +122,12 @@ if(WIN32)
         iphlpapi    # IP Helper APIs
         ws2_32      # Winsock
         dbghelp     # MiniDumpWriteDump
+        wintrust    # Authenticode signature verification
+        crypt32     # Certificate / signer extraction
+        taskschd    # Scheduled Task Scheduler COM
+        ole32       # COM (Task Scheduler, WMI)
+        oleaut32    # COM BSTR/VARIANT
+        wbemuuid    # WMI (Win32_QuickFixEngineering)
     )
     if(MINGW)
         # Wide-character entry point: the CRT calls wmain(argc, wchar_t**).
@@ -157,6 +163,7 @@ if(SYSRECON_BUILD_TESTS AND NOT CMAKE_CROSSCOMPILING)
         tests/test_text_utils.cpp
         tests/test_scan_plan.cpp
         tests/test_config.cpp
+        tests/test_utils_crypto.cpp
     )
     target_link_libraries(sysrecon_tests PRIVATE sysrecon_core GTest::gtest_main)
     # Lets tests validate the config.json that actually ships.

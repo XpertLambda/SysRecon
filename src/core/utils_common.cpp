@@ -5,10 +5,99 @@
 #include "../../include/core/text_utils.h"
 
 #include <cwctype>
+#include <cstdint>
+#include <array>
+#include <fstream>
 
 namespace SysRecon {
 namespace Core {
 namespace Utils {
+
+namespace {
+
+// Self-contained SHA-256 (FIPS 180-4). Portable and dependency-free so a
+// flagged binary hashes identically on the Linux build host and on Windows,
+// and so it is unit-testable in sysrecon_core.
+class Sha256 {
+public:
+    Sha256() { Reset(); }
+
+    void Update(const uint8_t* data, size_t len) {
+        for (size_t i = 0; i < len; ++i) {
+            buffer_[buffer_len_++] = data[i];
+            if (buffer_len_ == 64) { Transform(buffer_.data()); bit_len_ += 512; buffer_len_ = 0; }
+        }
+    }
+
+    std::array<uint8_t, 32> Final() {
+        uint64_t total_bits = bit_len_ + static_cast<uint64_t>(buffer_len_) * 8;
+        size_t i = buffer_len_;
+        buffer_[i++] = 0x80;
+        if (i > 56) { while (i < 64) buffer_[i++] = 0; Transform(buffer_.data()); i = 0; }
+        while (i < 56) buffer_[i++] = 0;
+        for (int b = 7; b >= 0; --b) buffer_[i++] = static_cast<uint8_t>(total_bits >> (b * 8));
+        Transform(buffer_.data());
+
+        std::array<uint8_t, 32> out{};
+        for (int j = 0; j < 8; ++j) {
+            out[j * 4 + 0] = static_cast<uint8_t>(state_[j] >> 24);
+            out[j * 4 + 1] = static_cast<uint8_t>(state_[j] >> 16);
+            out[j * 4 + 2] = static_cast<uint8_t>(state_[j] >> 8);
+            out[j * 4 + 3] = static_cast<uint8_t>(state_[j]);
+        }
+        return out;
+    }
+
+private:
+    static uint32_t Rotr(uint32_t x, uint32_t n) { return (x >> n) | (x << (32 - n)); }
+
+    void Reset() {
+        state_ = {0x6a09e667u, 0xbb67ae85u, 0x3c6ef372u, 0xa54ff53au,
+                  0x510e527fu, 0x9b05688cu, 0x1f83d9abu, 0x5be0cd19u};
+        bit_len_ = 0; buffer_len_ = 0;
+    }
+
+    void Transform(const uint8_t* chunk) {
+        static const uint32_t k[64] = {
+            0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+            0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+            0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+            0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+            0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+            0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+            0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+            0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2};
+        uint32_t w[64];
+        for (int i = 0; i < 16; ++i) {
+            w[i] = (static_cast<uint32_t>(chunk[i*4]) << 24) | (static_cast<uint32_t>(chunk[i*4+1]) << 16) |
+                   (static_cast<uint32_t>(chunk[i*4+2]) << 8) | static_cast<uint32_t>(chunk[i*4+3]);
+        }
+        for (int i = 16; i < 64; ++i) {
+            uint32_t s0 = Rotr(w[i-15],7) ^ Rotr(w[i-15],18) ^ (w[i-15] >> 3);
+            uint32_t s1 = Rotr(w[i-2],17) ^ Rotr(w[i-2],19) ^ (w[i-2] >> 10);
+            w[i] = w[i-16] + s0 + w[i-7] + s1;
+        }
+        uint32_t a=state_[0],b=state_[1],c=state_[2],d=state_[3],e=state_[4],f=state_[5],g=state_[6],h=state_[7];
+        for (int i = 0; i < 64; ++i) {
+            uint32_t S1 = Rotr(e,6) ^ Rotr(e,11) ^ Rotr(e,25);
+            uint32_t ch = (e & f) ^ (~e & g);
+            uint32_t t1 = h + S1 + ch + k[i] + w[i];
+            uint32_t S0 = Rotr(a,2) ^ Rotr(a,13) ^ Rotr(a,22);
+            uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
+            uint32_t t2 = S0 + maj;
+            h=g; g=f; f=e; e=d+t1; d=c; c=b; b=a; a=t1+t2;
+        }
+        state_[0]+=a; state_[1]+=b; state_[2]+=c; state_[3]+=d;
+        state_[4]+=e; state_[5]+=f; state_[6]+=g; state_[7]+=h;
+    }
+
+    std::array<uint32_t, 8> state_{};
+    std::array<uint8_t, 64> buffer_{};
+    size_t buffer_len_ = 0;
+    uint64_t bit_len_ = 0;
+};
+
+}  // namespace
 
 namespace {
 
@@ -445,6 +534,95 @@ String FormatBytes(size_t bytes) {
     std::wstringstream ss;
     ss << std::fixed << std::setprecision(2) << size << L" " << units[unit];
     return ss.str();
+}
+
+String Sha256Hex(const ByteVector& data) {
+    Sha256 h;
+    if (!data.empty()) h.Update(data.data(), data.size());
+    const std::array<uint8_t, 32> digest = h.Final();
+    static const wchar_t* hex = L"0123456789abcdef";
+    String out;
+    out.reserve(64);
+    for (uint8_t byte : digest) {
+        out.push_back(hex[byte >> 4]);
+        out.push_back(hex[byte & 0x0F]);
+    }
+    return out;
+}
+
+String CalculateSHA256(const String& file_path) {
+    std::ifstream file{std::filesystem::path(file_path), std::ios::binary};
+    if (!file.is_open()) return L"";
+
+    Sha256 h;
+    char buf[64 * 1024];
+    bool any = false;
+    while (file) {
+        file.read(buf, sizeof(buf));
+        std::streamsize got = file.gcount();
+        if (got > 0) {
+            h.Update(reinterpret_cast<const uint8_t*>(buf), static_cast<size_t>(got));
+            any = true;
+        }
+    }
+    if (!any && file.bad()) return L"";
+
+    const std::array<uint8_t, 32> digest = h.Final();
+    static const wchar_t* hex = L"0123456789abcdef";
+    String out;
+    out.reserve(64);
+    for (uint8_t byte : digest) {
+        out.push_back(hex[byte >> 4]);
+        out.push_back(hex[byte & 0x0F]);
+    }
+    return out;
+}
+
+StringVector MissingLpePatchHints(uint32_t os_build, const std::set<String>& installed_kbs) {
+    // Curated, deliberately small table of high-signal local-privilege-escalation
+    // issues. Each entry's `fix_kbs` lists KBs that (among others) addressed it;
+    // if the host's build is in range and none of those KBs are installed, the
+    // CVE is reported as a candidate. This is a hint, not proof: cumulative
+    // updates supersede these KBs, so findings are marked "verify".
+    struct Entry {
+        const wchar_t* cve;
+        const wchar_t* name;
+        uint32_t min_build;        // inclusive; 0 = any
+        uint32_t max_build;        // inclusive; 0 = any
+        std::vector<String> fix_kbs;
+    };
+    static const std::vector<Entry> table = {
+        { L"CVE-2021-34527", L"PrintNightmare (Print Spooler RCE/LPE)", 0, 0,
+          { L"KB5004945", L"KB5004946", L"KB5004947", L"KB5004948", L"KB5004950" } },
+        { L"CVE-2021-1675",  L"Print Spooler LPE",                      0, 0,
+          { L"KB5003635", L"KB5004945" } },
+        { L"CVE-2021-36934", L"HiveNightmare / SeriousSAM (SAM hive readable)", 0, 0,
+          { L"KB5004605", L"KB5004237" } },
+        { L"CVE-2021-1732",  L"Win32k window-object LPE",               0, 0,
+          { L"KB4601319", L"KB4601315" } },
+        { L"CVE-2022-21882", L"Win32k LPE (CVE-2021-1732 bypass)",      0, 0,
+          { L"KB5009543", L"KB5009566" } },
+        { L"CVE-2020-1472",  L"Zerologon (Netlogon)",                   0, 0,
+          { L"KB4565349", L"KB4571756", L"KB4571694" } },
+    };
+
+    StringVector hints;
+    for (const auto& e : table) {
+        if (e.min_build && os_build < e.min_build) continue;
+        if (e.max_build && os_build > e.max_build) continue;
+        bool patched = false;
+        for (const auto& kb : e.fix_kbs) {
+            if (installed_kbs.count(kb)) { patched = true; break; }
+        }
+        if (patched) continue;
+        String fixes;
+        for (size_t i = 0; i < e.fix_kbs.size(); ++i) {
+            if (i) fixes += L", ";
+            fixes += e.fix_kbs[i];
+        }
+        hints.push_back(String(e.cve) + L" (" + e.name + L") - no fixing hotfix found (" + fixes + L")");
+    }
+    return hints;
 }
 
 }

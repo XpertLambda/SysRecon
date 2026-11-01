@@ -34,10 +34,14 @@ public:
     void Cleanup();
 
     // Per-category toggles, driven from config.json (modules.privesc.*).
-    void SetCheckServices(bool enable)    { check_services_ = enable; }
-    void SetCheckRegistry(bool enable)    { check_registry_ = enable; }
-    void SetCheckFilesystem(bool enable)  { check_filesystem_ = enable; }
-    void SetCheckCredentials(bool enable) { check_credentials_ = enable; }
+    void SetCheckServices(bool enable)       { check_services_ = enable; }
+    void SetCheckRegistry(bool enable)       { check_registry_ = enable; }
+    void SetCheckFilesystem(bool enable)     { check_filesystem_ = enable; }
+    void SetCheckCredentials(bool enable)    { check_credentials_ = enable; }
+    void SetVerifySignatures(bool enable)    { verify_signatures_ = enable; }
+    void SetCheckTokens(bool enable)         { check_tokens_ = enable; }
+    void SetCheckScheduledTasks(bool enable) { check_scheduled_tasks_ = enable; }
+    void SetCheckPatches(bool enable)        { check_patches_ = enable; }
 
     const std::vector<PrivEscFinding>& GetFindings() const { return findings_; }
     const ScanResults& GetScanResults() const { return scan_results_; }
@@ -52,6 +56,11 @@ public:
     bool CheckStoredCredentials();
     bool CheckUacPosture();
     bool CheckUnattendedInstallFiles();
+    // Phase 1 (Tier 1 LPE) additions.
+    bool CheckTokenPrivileges();       // current token: integrity, elevation, dangerous privileges
+    bool CheckScheduledTasks();        // SYSTEM/highest tasks with a writable binary
+    bool CheckExtendedAutoruns();      // Winlogon, AppInit_DLLs, IFEO, Startup folder
+    bool CheckMissingPatches();        // installed hotfixes vs known-LPE table
 
 private:
     // Records a finding both in the typed list and as a generic ScanResult
@@ -73,6 +82,10 @@ private:
     bool check_registry_ = true;
     bool check_filesystem_ = true;
     bool check_credentials_ = true;
+    bool verify_signatures_ = true;
+    bool check_tokens_ = true;
+    bool check_scheduled_tasks_ = true;
+    bool check_patches_ = true;
 };
 
 } // namespace Modules

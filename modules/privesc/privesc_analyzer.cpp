@@ -2,6 +2,11 @@
 #include "../../include/core/utils.h"
 #include "../../include/core/whitelist.h"
 
+#ifdef _WIN32
+#include <objbase.h>
+#include <taskschd.h>
+#endif
+
 namespace SysRecon {
 namespace Modules {
 
@@ -61,6 +66,18 @@ bool PrivEscAnalyzer::RunAllChecks() {
     if (check_credentials_) {
         CheckStoredCredentials();
         CheckUnattendedInstallFiles();
+    }
+    if (check_tokens_) {
+        CheckTokenPrivileges();
+    }
+    if (check_scheduled_tasks_) {
+        CheckScheduledTasks();
+    }
+    if (check_registry_ || check_filesystem_) {
+        CheckExtendedAutoruns();
+    }
+    if (check_patches_) {
+        CheckMissingPatches();
     }
 
     SYSRECON_LOG_INFO(L"Privilege-escalation assessment complete: " +
@@ -140,6 +157,25 @@ std::vector<SvcEntry> EnumerateServiceConfigs() {
 }
 
 // True when the service account is a high-privilege local account.
+// Short signature + SHA-256 descriptor for a binary, appended to finding
+// evidence so an analyst can triage (unsigned SYSTEM binaries are worth a look;
+// the hash supports IOC lookups).
+String DescribeBinary(const String& exe) {
+    Core::Utils::SignatureInfo sig = Core::Utils::VerifySignature(exe);
+    String sig_text;
+    switch (sig.status) {
+        case Core::Utils::SignatureStatus::Trusted:
+            sig_text = L"signed"; if (!sig.signer.empty()) sig_text += L" (" + sig.signer + L")"; break;
+        case Core::Utils::SignatureStatus::Unsigned:  sig_text = L"UNSIGNED"; break;
+        case Core::Utils::SignatureStatus::Untrusted: sig_text = L"signature untrusted"; break;
+        default:                                      sig_text = L"signature unknown"; break;
+    }
+    String sha = Core::Utils::CalculateSHA256(exe);
+    String out = L"signature=" + sig_text;
+    if (!sha.empty()) out += L" | sha256=" + sha;
+    return out;
+}
+
 bool AccountIsPrivileged(const String& account) {
     String a = Core::Utils::ToLower(account);
     return a.empty() ||
@@ -326,6 +362,7 @@ bool PrivEscAnalyzer::CheckWritableServiceBinaries() {
             L" on next start.";
         f.evidence = L"Target=" + target + L" | Writable by: " +
                      Core::Utils::Join(principals, L", ");
+        if (verify_signatures_) f.evidence += L" | " + DescribeBinary(exe);
         f.remediation =
             L"Tighten NTFS permissions on the binary and its directory so only "
             L"SYSTEM/Administrators have write/modify; grant Users read+execute "
@@ -424,6 +461,7 @@ bool PrivEscAnalyzer::CheckAutorunWritableTargets() {
                 + String(k.root == HKEY_LOCAL_MACHINE ? L" (including administrators)." : L".");
             f.evidence = String(k.label) + L"\\" + value + L" -> " + exe +
                          L" | Writable by: " + Core::Utils::Join(who, L", ");
+            if (verify_signatures_) f.evidence += L" | " + DescribeBinary(exe);
             f.remediation = L"Restrict NTFS write/modify on the target binary to "
                 L"SYSTEM/Administrators, or remove the autorun entry if unneeded.";
             f.reference = L"MITRE ATT&CK T1547.001 (Registry Run Keys)";
@@ -536,6 +574,272 @@ bool PrivEscAnalyzer::CheckUnattendedInstallFiles() {
     return true;
 }
 
+bool PrivEscAnalyzer::CheckTokenPrivileges() {
+    const String integrity = Core::Utils::GetIntegrityLevel();
+    const bool elevated = Core::Utils::IsTokenElevated();
+    auto privs = Core::Utils::GetTokenPrivileges();
+
+    // Informational context finding: who are we running as?
+    {
+        StringVector enabled_names;
+        for (const auto& p : privs) if (p.second) enabled_names.push_back(p.first);
+        PrivEscFinding f;
+        f.category = L"Context";
+        f.title = L"Current security context";
+        f.risk_level = SecurityLevel::Low;
+        f.description = L"Integrity level and token of the account SysRecon is running as. "
+            L"Privilege-escalation findings should be read in this context.";
+        f.evidence = L"IntegrityLevel=" + integrity +
+                     L" | Elevated=" + String(elevated ? L"Yes" : L"No") +
+                     L" | EnabledPrivileges=" + std::to_wstring(enabled_names.size());
+        f.remediation = L"Informational; no action required.";
+        f.reference = L"Context for the privilege-escalation findings below";
+        Record(f);
+    }
+
+    // Dangerous privileges that provide a direct path to SYSTEM when held.
+    struct Dangerous { const wchar_t* name; const wchar_t* note; const wchar_t* ref; };
+    const Dangerous dangerous[] = {
+        { L"SeImpersonatePrivilege",     L"impersonate a SYSTEM token (Potato family)", L"MITRE ATT&CK T1134.001" },
+        { L"SeAssignPrimaryTokenPrivilege", L"assign a primary token to a new process (Potato family)", L"MITRE ATT&CK T1134.001" },
+        { L"SeBackupPrivilege",          L"read any file, including SAM/SYSTEM hives", L"MITRE ATT&CK T1003.002" },
+        { L"SeRestorePrivilege",         L"overwrite any file / protected registry key", L"MITRE ATT&CK T1574" },
+        { L"SeTakeOwnershipPrivilege",   L"take ownership of any securable object", L"MITRE ATT&CK T1222.001" },
+        { L"SeDebugPrivilege",           L"open and inject into any process (e.g. lsass)", L"MITRE ATT&CK T1134" },
+        { L"SeLoadDriverPrivilege",      L"load a kernel driver (BYOVD)", L"MITRE ATT&CK T1068" },
+        { L"SeManageVolumePrivilege",    L"raw volume access enabling arbitrary file write", L"MITRE ATT&CK T1068" },
+        { L"SeTcbPrivilege",             L"act as part of the operating system", L"MITRE ATT&CK T1134" },
+    };
+
+    for (const auto& p : privs) {
+        for (const auto& d : dangerous) {
+            if (p.first != d.name) continue;
+            PrivEscFinding f;
+            f.category = L"Token";
+            f.title = String(L"Sensitive privilege held: ") + d.name;
+            // Held-and-enabled by a non-elevated/medium token is the strongest
+            // signal; High/System integrity holding it is expected but noted.
+            bool high_ctx = (integrity == L"High" || integrity == L"System");
+            f.risk_level = (p.second && !high_ctx) ? SecurityLevel::High : SecurityLevel::Medium;
+            f.description = String(L"The current token holds ") + d.name + L" (" +
+                            (p.second ? L"enabled" : L"disabled") + L"), which lets the holder " +
+                            d.note + L".";
+            f.evidence = L"Privilege=" + p.first + L" | Enabled=" + String(p.second ? L"Yes" : L"No") +
+                         L" | IntegrityLevel=" + integrity;
+            f.remediation = L"Remove this privilege from the account/group unless the role "
+                L"genuinely requires it (Local Security Policy > User Rights Assignment). "
+                L"Service accounts rarely need it.";
+            f.reference = d.ref;
+            Record(f);
+        }
+    }
+    return true;
+}
+
+bool PrivEscAnalyzer::CheckScheduledTasks() {
+    HRESULT init = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    const bool need_uninit = (init == S_OK || init == S_FALSE);
+    if (init != S_OK && init != S_FALSE && init != RPC_E_CHANGED_MODE) {
+        return true;
+    }
+
+    ITaskService* service = nullptr;
+    if (SUCCEEDED(CoCreateInstance(CLSID_TaskScheduler, nullptr, CLSCTX_INPROC_SERVER,
+                                   IID_ITaskService, reinterpret_cast<void**>(&service))) && service) {
+        VARIANT empty; VariantInit(&empty);
+        if (SUCCEEDED(service->Connect(empty, empty, empty, empty))) {
+            ITaskFolder* root = nullptr;
+            BSTR root_path = SysAllocString(L"\\");
+            if (SUCCEEDED(service->GetFolder(root_path, &root)) && root) {
+                // Walk folders breadth-first.
+                std::vector<ITaskFolder*> stack = { root };
+                while (!stack.empty()) {
+                    ITaskFolder* folder = stack.back();
+                    stack.pop_back();
+
+                    IRegisteredTaskCollection* tasks = nullptr;
+                    if (SUCCEEDED(folder->GetTasks(TASK_ENUM_HIDDEN, &tasks)) && tasks) {
+                        LONG count = 0; tasks->get_Count(&count);
+                        for (LONG i = 1; i <= count; ++i) {
+                            IRegisteredTask* task = nullptr;
+                            VARIANT vi; VariantInit(&vi); vi.vt = VT_I4; vi.lVal = i;
+                            HRESULT gi = tasks->get_Item(vi, &task);
+                            VariantClear(&vi);
+                            if (FAILED(gi) || !task) continue;
+
+                            BSTR xmlB = nullptr;
+                            String xml;
+                            if (SUCCEEDED(task->get_Xml(&xmlB)) && xmlB) {
+                                xml.assign(xmlB, SysStringLen(xmlB));
+                                SysFreeString(xmlB);
+                            }
+                            BSTR nameB = nullptr; String task_name;
+                            if (SUCCEEDED(task->get_Name(&nameB)) && nameB) {
+                                task_name.assign(nameB, SysStringLen(nameB));
+                                SysFreeString(nameB);
+                            }
+                            task->Release();
+
+                            // Parse the task XML for a highest/SYSTEM run level
+                            // and the <Command> of an exec action. The COM
+                            // action/principal objects are awkward under MinGW;
+                            // the XML carries the same facts portably.
+                            String lx = Core::Utils::ToLower(xml);
+                            bool privileged =
+                                lx.find(L"<runlevel>highestavailable</runlevel>") != String::npos ||
+                                lx.find(L"<logontype>s4u</logontype>") != String::npos ||
+                                lx.find(L"<userid>s-1-5-18</userid>") != String::npos ||
+                                lx.find(L"localsystem") != String::npos;
+                            if (!privileged) continue;
+
+                            size_t cs = lx.find(L"<command>");
+                            if (cs == String::npos) continue;
+                            size_t ce = lx.find(L"</command>", cs);
+                            if (ce == String::npos) continue;
+                            // Use original-case slice for the value.
+                            String cmd = xml.substr(cs + 9, ce - (cs + 9));
+                            cmd = Core::Utils::Trim(cmd);
+                            String exe = Core::Utils::ExtractExecutablePath(
+                                Core::Utils::ExpandImagePath(cmd));
+                            if (exe.empty()) continue;
+
+                            StringVector who;
+                            bool exe_w = Core::Utils::IsWritableByNonAdmin(exe, &who);
+                            String dir = Core::Utils::GetDirectoryName(exe);
+                            StringVector whoDir;
+                            bool dir_w = !dir.empty() && Core::Utils::IsWritableByNonAdmin(dir, &whoDir);
+                            if (!exe_w && !dir_w) continue;
+
+                            PrivEscFinding f;
+                            f.category = L"Scheduled Task";
+                            f.title = L"Hijackable scheduled task: " + task_name;
+                            f.risk_level = SecurityLevel::High;
+                            f.description = L"A scheduled task runs with high/SYSTEM privileges and its "
+                                L"executable" + String(exe_w ? L"" : L"'s directory") +
+                                L" is writable by a non-administrative principal. Replacing/planting the "
+                                L"binary runs code as the task's privileged principal at its next trigger.";
+                            f.evidence = L"Task=" + task_name + L" | Binary=" + exe +
+                                         L" | Writable by: " + Core::Utils::Join(exe_w ? who : whoDir, L", ") +
+                                         L" | " + DescribeBinary(exe);
+                            f.remediation = L"Restrict NTFS write/modify on the task binary and its "
+                                L"directory to SYSTEM/Administrators, or re-point the task to a protected "
+                                L"location.";
+                            f.reference = L"MITRE ATT&CK T1053.005 (Scheduled Task)";
+                            Record(f);
+                        }
+                        tasks->Release();
+                    }
+
+                    ITaskFolderCollection* subfolders = nullptr;
+                    if (SUCCEEDED(folder->GetFolders(0, &subfolders)) && subfolders) {
+                        LONG fcount = 0; subfolders->get_Count(&fcount);
+                        for (LONG i = 1; i <= fcount; ++i) {
+                            ITaskFolder* sub = nullptr;
+                            VARIANT vf; VariantInit(&vf); vf.vt = VT_I4; vf.lVal = i;
+                            HRESULT gf = subfolders->get_Item(vf, &sub);
+                            VariantClear(&vf);
+                            if (SUCCEEDED(gf) && sub) {
+                                stack.push_back(sub);
+                            }
+                        }
+                        subfolders->Release();
+                    }
+
+                    if (folder != root) folder->Release();
+                }
+                root->Release();
+            }
+            SysFreeString(root_path);
+        }
+        service->Release();
+    }
+
+    if (need_uninit) CoUninitialize();
+    return true;
+}
+
+bool PrivEscAnalyzer::CheckExtendedAutoruns() {
+    auto flagIfWritable = [&](const String& label, const String& raw_value,
+                              const wchar_t* ref) {
+        String exe = Core::Utils::ExtractExecutablePath(Core::Utils::ExpandImagePath(raw_value));
+        if (exe.empty()) return;
+        StringVector who;
+        if (!Core::Utils::IsWritableByNonAdmin(exe, &who)) return;
+        PrivEscFinding f;
+        f.category = L"Autostart";
+        f.title = L"Writable autostart target: " + label;
+        f.risk_level = SecurityLevel::High;
+        f.description = L"An auto-start/extension entry (" + label + L") resolves to a binary "
+            L"writable by a non-administrative principal; replacing it executes code in the "
+            L"context that loads the entry (often at logon, as the logging-on user or SYSTEM).";
+        f.evidence = label + L" -> " + exe + L" | Writable by: " + Core::Utils::Join(who, L", ") +
+                     L" | " + DescribeBinary(exe);
+        f.remediation = L"Restrict NTFS write/modify on the target to SYSTEM/Administrators, "
+            L"or remove the entry if it is not required.";
+        f.reference = ref;
+        Record(f);
+    };
+
+    const wchar_t* winlogon = L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon";
+    for (const wchar_t* val : { L"Userinit", L"Shell", L"Taskman" }) {
+        String v = Core::Utils::ReadRegistryString(HKEY_LOCAL_MACHINE, winlogon, val);
+        // Userinit/Shell can be comma-separated lists of commands.
+        for (const auto& part : Core::Utils::Split(v, L",")) {
+            String p = Core::Utils::Trim(part);
+            if (!p.empty()) flagIfWritable(String(L"Winlogon\\") + val, p,
+                                           L"MITRE ATT&CK T1547.004 (Winlogon Helper DLL)");
+        }
+    }
+
+    // AppInit_DLLs (and WOW6432Node): DLLs injected into most GUI processes.
+    for (const wchar_t* key : {
+            L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Windows",
+            L"SOFTWARE\\WOW6432Node\\Microsoft\\Windows NT\\CurrentVersion\\Windows" }) {
+        String v = Core::Utils::ReadRegistryString(HKEY_LOCAL_MACHINE, key, L"AppInit_DLLs");
+        for (const auto& part : Core::Utils::Split(v, L",")) {
+            String p = Core::Utils::Trim(part);
+            if (!p.empty()) flagIfWritable(L"AppInit_DLLs", p,
+                                           L"MITRE ATT&CK T1546.010 (AppInit DLLs)");
+        }
+    }
+
+    // Image File Execution Options: a Debugger value hijacks the named program.
+    const wchar_t* ifeo = L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options";
+    for (const auto& sub : Core::Utils::EnumerateRegistrySubkeys(HKEY_LOCAL_MACHINE, ifeo)) {
+        String dbg = Core::Utils::ReadRegistryString(HKEY_LOCAL_MACHINE,
+                        String(ifeo) + L"\\" + sub, L"Debugger");
+        if (!dbg.empty()) {
+            flagIfWritable(L"IFEO Debugger for " + sub, dbg,
+                           L"MITRE ATT&CK T1546.012 (Image File Execution Options Injection)");
+        }
+    }
+    return true;
+}
+
+bool PrivEscAnalyzer::CheckMissingPatches() {
+    std::set<String> kbs = Core::Utils::GetInstalledHotfixes();
+    uint32_t build = Core::Utils::GetOsBuildNumber();
+    StringVector hints = Core::Utils::MissingLpePatchHints(build, kbs);
+    if (hints.empty()) return true;
+
+    for (const auto& hint : hints) {
+        PrivEscFinding f;
+        f.category = L"Patch";
+        f.title = L"Potential missing LPE patch";
+        f.risk_level = SecurityLevel::Medium;  // candidate; cumulative updates may supersede
+        f.description = L"A well-known local-privilege-escalation issue has no fixing hotfix among "
+            L"the installed KBs. Cumulative updates can supersede the listed KBs, so confirm the "
+            L"effective patch level before relying on this.";
+        f.evidence = hint + L" | OSBuild=" + std::to_wstring(build) +
+                     L" | InstalledHotfixes=" + std::to_wstring(kbs.size());
+        f.remediation = L"Verify the host's patch level (installed cumulative update) and apply "
+            L"the latest security updates if the issue is genuinely unpatched.";
+        f.reference = L"MITRE ATT&CK T1068 (Exploitation for Privilege Escalation)";
+        Record(f);
+    }
+    return true;
+}
+
 #else  // non-Windows stubs (cross-compilation / native build sanity only)
 
 bool PrivEscAnalyzer::CheckUnquotedServicePaths()     { return true; }
@@ -547,6 +851,10 @@ bool PrivEscAnalyzer::CheckAutorunWritableTargets()   { return true; }
 bool PrivEscAnalyzer::CheckStoredCredentials()        { return true; }
 bool PrivEscAnalyzer::CheckUacPosture()               { return true; }
 bool PrivEscAnalyzer::CheckUnattendedInstallFiles()   { return true; }
+bool PrivEscAnalyzer::CheckTokenPrivileges()           { return true; }
+bool PrivEscAnalyzer::CheckScheduledTasks()            { return true; }
+bool PrivEscAnalyzer::CheckExtendedAutoruns()          { return true; }
+bool PrivEscAnalyzer::CheckMissingPatches()            { return true; }
 
 #endif
 

@@ -24,7 +24,7 @@ const std::map<std::string, std::set<std::string>>& ModuleSchema() {
         {"network",   {"enabled", "scan_listening_ports", "analyze_connections"}},
         {"registry",  {"enabled", "scan_startup_keys", "analyze_policies", "check_permissions", "custom_keys"}},
         {"memory",    {"enabled", "create_dumps", "scan_for_malware", "max_dump_size_mb"}},
-        {"privesc",   {"enabled", "check_services", "check_registry", "check_filesystem", "check_credentials"}},
+        {"privesc",   {"enabled", "check_services", "check_registry", "check_filesystem", "check_credentials", "verify_signatures", "check_tokens", "check_scheduled_tasks", "check_patches"}},
     };
     return schema;
 }
@@ -204,6 +204,10 @@ bool ConfigManager::LoadFromFile(const String& filename) {
                 r.Bool(*pe, "modules.privesc", "check_registry", parsed.privesc.check_registry);
                 r.Bool(*pe, "modules.privesc", "check_filesystem", parsed.privesc.check_filesystem);
                 r.Bool(*pe, "modules.privesc", "check_credentials", parsed.privesc.check_credentials);
+                r.Bool(*pe, "modules.privesc", "verify_signatures", parsed.privesc.verify_signatures);
+                r.Bool(*pe, "modules.privesc", "check_tokens", parsed.privesc.check_tokens);
+                r.Bool(*pe, "modules.privesc", "check_scheduled_tasks", parsed.privesc.check_scheduled_tasks);
+                r.Bool(*pe, "modules.privesc", "check_patches", parsed.privesc.check_patches);
             }
         }
 
@@ -286,6 +290,10 @@ bool ConfigManager::SaveToFile(const String& filename) const {
         j["modules"]["privesc"]["check_registry"] = config_.privesc.check_registry;
         j["modules"]["privesc"]["check_filesystem"] = config_.privesc.check_filesystem;
         j["modules"]["privesc"]["check_credentials"] = config_.privesc.check_credentials;
+        j["modules"]["privesc"]["verify_signatures"] = config_.privesc.verify_signatures;
+        j["modules"]["privesc"]["check_tokens"] = config_.privesc.check_tokens;
+        j["modules"]["privesc"]["check_scheduled_tasks"] = config_.privesc.check_scheduled_tasks;
+        j["modules"]["privesc"]["check_patches"] = config_.privesc.check_patches;
 
         j["output"]["output_directory"] = Utils::WideToUtf8(config_.output.output_directory);
         j["output"]["generate_json"] = config_.output.generate_json;

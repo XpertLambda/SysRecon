@@ -105,6 +105,10 @@ void ScanEngine::ApplyConfigToModules() {
         privesc_analyzer_->SetCheckRegistry(cfg.privesc.check_registry);
         privesc_analyzer_->SetCheckFilesystem(cfg.privesc.check_filesystem);
         privesc_analyzer_->SetCheckCredentials(cfg.privesc.check_credentials);
+        privesc_analyzer_->SetVerifySignatures(cfg.privesc.verify_signatures);
+        privesc_analyzer_->SetCheckTokens(cfg.privesc.check_tokens);
+        privesc_analyzer_->SetCheckScheduledTasks(cfg.privesc.check_scheduled_tasks);
+        privesc_analyzer_->SetCheckPatches(cfg.privesc.check_patches);
     }
 }
 

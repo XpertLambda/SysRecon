@@ -2,6 +2,7 @@
 
 #include "../sysrecon.h"
 #include <ctime>
+#include <set>
 
 namespace SysRecon {
 namespace Core {
@@ -32,6 +33,20 @@ String ReplaceAll(const String& str, const String& from, const String& to);
 // contain spaces (first ".exe" token wins), and a leading \??\ native prefix.
 // Pure string logic so it is unit-testable on any host.
 String ExtractExecutablePath(const String& image_path);
+
+// SHA-256 of a buffer / of a file, returned as lowercase hex (64 chars) or an
+// empty string if the file could not be read. A portable implementation so the
+// hash of a flagged binary is identical on the build host and the target, and
+// is unit-tested against the NIST vectors with no OS crypto dependency.
+String Sha256Hex(const ByteVector& data);
+String CalculateSHA256(const String& file_path);
+
+// Offline "is a known local-privilege-escalation patch missing?" lookup.
+// Given the OS build number and the set of installed hotfix IDs (e.g.
+// "KB5004945"), returns one human-readable hint per curated CVE whose fixing
+// KB is not present. Pure data + string logic, unit-tested. The Win32 side only
+// gathers the inputs (WMI Win32_QuickFixEngineering + the build number).
+StringVector MissingLpePatchHints(uint32_t os_build, const std::set<String>& installed_kbs);
 
 bool FileExists(const String& path);
 bool DirectoryExists(const String& path);
@@ -126,6 +141,33 @@ StringVector EnumerateRegistryValues(HKEY root, const String& subkey);
 // are appended to `principals` when non-null. This is the core signal for
 // binary-planting and service-binary-tampering privilege escalation.
 bool IsWritableByNonAdmin(const String& path, StringVector* principals = nullptr);
+
+// Authenticode verification via WinVerifyTrust.
+enum class SignatureStatus {
+    Trusted,     // valid, chains to a trusted root
+    Unsigned,    // no embedded signature (and no catalog hit)
+    Untrusted,   // signed but invalid/expired/untrusted chain
+    Error        // could not be determined (file missing, API failure)
+};
+struct SignatureInfo {
+    SignatureStatus status = SignatureStatus::Error;
+    String signer;           // subject CN of the signing certificate, if any
+    String status_text;      // short human-readable status
+};
+SignatureInfo VerifySignature(const String& file_path);
+
+// Current-process token facts, for the privilege-escalation context check.
+String GetIntegrityLevel();                 // "System" / "High" / "Medium" / "Low" / "Untrusted"
+bool IsTokenElevated();                      // token elevation (split-token aware)
+// Privileges currently present in the token, each as {name, enabled}. Name is
+// the system name, e.g. "SeImpersonatePrivilege".
+std::vector<std::pair<String, bool>> GetTokenPrivileges();
+StringVector GetTokenGroupNames();           // resolved group account names
+
+// Installed hotfix IDs (e.g. "KB5004945") from WMI Win32_QuickFixEngineering,
+// and the OS build number. Used together with MissingLpePatchHints().
+std::set<String> GetInstalledHotfixes();
+uint32_t GetOsBuildNumber();
 #endif
 
 }
