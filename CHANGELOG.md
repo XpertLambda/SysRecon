@@ -6,6 +6,13 @@ All notable changes to SysRecon are documented here.
 
 ### Fixed
 
+- **Every run with command-line arguments crashed on real Windows** (access
+  violation, exit code `0xC0000005`), including `--help`. `main()` forwarded
+  `__wargv` to `wmain`, but without `-municode` the MinGW/UCRT startup only
+  initialises the narrow `argv`, so `__wargv` was NULL. Wine initialises both,
+  which is why every wine test passed. MinGW builds now use `-municode` and
+  the CRT calls `wmain` directly. Found by the new Windows end-to-end CI job.
+
 - **A module disabled in `config.json` could not be enabled from the command
   line.** Modules were constructed from the config selection *before* the
   command-line selection was applied, so `sysrecon.exe --memory` with the

@@ -970,12 +970,11 @@ int InteractiveMode() {
     }
 }
 
-int wmain(int argc, wchar_t* argv[]);
-
-int main() {
-    return wmain(__argc, __wargv);
-}
-
+// Entry point. MinGW builds use -municode (CMakeLists.txt) so the CRT calls
+// wmain with real wide arguments; MSVC does so natively. The previous
+// `int main() { return wmain(__argc, __wargv); }` shim crashed on every
+// real Windows run with arguments: without -municode the CRT never fills
+// __wargv, so argv was NULL. Wine fills it regardless, which hid the bug.
 int wmain(int argc, wchar_t* argv[]) {
     try {
         // Console attachment.

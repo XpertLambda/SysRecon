@@ -121,6 +121,11 @@ if(WIN32)
         ws2_32      # Winsock
         dbghelp     # MiniDumpWriteDump
     )
+    if(MINGW)
+        # Wide-character entry point: the CRT calls wmain(argc, wchar_t**).
+        target_compile_options(sysrecon PRIVATE -municode)
+        target_link_options(sysrecon PRIVATE -municode)
+    endif()
     install(TARGETS sysrecon DESTINATION bin)
 else()
     message(STATUS "Not targeting Windows: building sysrecon_core and tests only.")
