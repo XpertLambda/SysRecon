@@ -518,7 +518,7 @@ int FirewallRuleSeverity(const FirewallRuleView& rule) {
         return 0;
     }
     if (is_any(rule.local_ports) && rule.application.empty() && rule.app_package.empty() &&
-        is_any(rule.service)) {
+        rule.local_user_owner.empty() && is_any(rule.service)) {
         return 3;
     }
     // An any-port rule scoped to one program only admits that program's

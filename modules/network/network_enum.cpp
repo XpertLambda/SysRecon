@@ -707,6 +707,7 @@ bool NetworkEnumerator::AnalyzeFirewallRules() {
                         if (SUCCEEDED(rule3->get_LocalAppPackageId(&b))) view.app_package = bstr(b);
                         b = nullptr;
                         if (SUCCEEDED(rule3->get_LocalUserOwner(&b))) owner = bstr(b);
+                        view.local_user_owner = owner;
                         b = nullptr;
                         rule3->Release();
                     }

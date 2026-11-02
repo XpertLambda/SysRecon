@@ -260,6 +260,14 @@ TEST(FirewallRules, Severity) {
     package.public_profile = true;
     EXPECT_EQ(FirewallRuleSeverity(package), 0);
 
+    // What CI actually saw on Windows Server 2025: the Store-app rules report
+    // no package but are owned by SYSTEM or the installing administrator.
+    FirewallRuleView owned = open;
+    owned.local_user_owner = L"S-1-5-18";
+    EXPECT_EQ(FirewallRuleSeverity(owned), 0);
+    owned.local_user_owner = L"S-1-5-21-3077485881-3661871218-4154919024-500";
+    EXPECT_EQ(FirewallRuleSeverity(owned), 0);
+
     FirewallRuleView rdp = open;
     rdp.local_ports = L"3389";
     rdp.protocol = 6;
