@@ -160,8 +160,31 @@ if ($json) {
     $report = Get-Content -Raw -LiteralPath $json.FullName | ConvertFrom-Json
     Assert-ScanComplete $report 'default scan'
     Assert-True ($report.scan_info.config -ieq (Join-Path $InstallDir 'config.json')) "used installed config ($($report.scan_info.config))"
+    # Expected selection = the modules the installed config enables, in
+    # execution order (scan_plan.cpp AllScanModules). Derived rather than
+    # hardcoded so adding a default-on module does not break this check.
+    $order = [ordered]@{
+        accounts = 'Accounts'; services = 'Services'; processes = 'Processes'; network = 'Network'
+        registry = 'Registry'; memory = 'Memory'; privesc = 'Privilege Escalation'; domain = 'Domain'
+    }
+    $installedCfg = Get-Content -Raw -LiteralPath (Join-Path $InstallDir 'config.json') | ConvertFrom-Json
+    $expected = @($order.Keys | Where-Object {
+        $installedCfg.modules.PSObject.Properties.Name -contains $_ -and $installedCfg.modules.$_.enabled
+    } | ForEach-Object { $order[$_] }) -join ','
     $modules = @($report.scan_info.modules) -join ','
-    Assert-True ($modules -eq 'Accounts,Services,Processes,Network,Registry') "config module selection applied, Memory off ($modules)"
+    Assert-True ($modules -eq $expected) "config module selection applied ($modules; expected $expected)"
+    Assert-True (-not (@($report.scan_info.modules) -contains 'Memory')) 'Memory module off by default'
+
+    # Severity profile of a clean CI host, published so false-positive floods
+    # are visible without downloading the report (a run once showed ~260
+    # Critical findings from a broken service-DACL check).
+    $serious = @($report.results | Where-Object { $_.risk_level -in 'Critical', 'High' })
+    $groups = $serious | Group-Object { "$($_.risk_level) | $($_.module) | $(($_.item -split ':')[0])" } |
+        Sort-Object Count -Descending | Select-Object -First 15
+    $summary = ($groups | ForEach-Object { "$($_.Count) x $($_.Name)" }) -join "`n"
+    $critical = @($serious | Where-Object risk_level -eq 'Critical').Count
+    Write-Annotation notice "Default scan on a clean host: $critical Critical, $($serious.Count - $critical) High`n$summary"
+    Assert-True ($critical -le 10) "clean host does not produce a flood of Critical findings ($critical)"
     Assert-True (@($report.results | Where-Object { $_.module -eq 'User Accounts' }).Count -gt 0) 'local accounts enumerated'
     Copy-Item -Recurse -Force -LiteralPath $ReportsDir -Destination (Join-Path $OutDir 'installed-reports')
 }

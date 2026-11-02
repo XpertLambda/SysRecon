@@ -12,7 +12,7 @@ if (-not (Get-Variable -Name TestTitle -Scope Script -ErrorAction SilentlyContin
 # On GitHub Actions, failures are also emitted as workflow annotations: they
 # show on the run page and are readable through the public API, whereas the
 # raw job log needs an authenticated download.
-function Write-Annotation([ValidateSet('error', 'warning')][string]$Level, [string]$Message) {
+function Write-Annotation([ValidateSet('error', 'warning', 'notice')][string]$Level, [string]$Message) {
     if (-not $env:GITHUB_ACTIONS) { return }
     $escaped = $Message.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
     Write-Host "::$Level title=$($script:TestTitle)::$escaped"

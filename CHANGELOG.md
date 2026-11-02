@@ -4,6 +4,36 @@ All notable changes to SysRecon are documented here.
 
 ## [Unreleased]
 
+### Fixed — found by the Windows CI jobs on real Windows
+
+- **~260 false Critical "weak service permissions" findings on a clean
+  Windows install.** The service DACL check tested `mask & SERVICE_ALL_ACCESS`,
+  which is non-zero for *any* service right, so the read/query access every
+  standard service grants to Authenticated Users and INTERACTIVE counted as
+  reconfiguration rights; most services run as LocalSystem, hence Critical.
+  Only SERVICE_CHANGE_CONFIG, WRITE_DAC, WRITE_OWNER and GENERIC_WRITE/ALL now
+  count.
+- **Writable-file/directory checks** (service binaries, PATH directories,
+  autorun and scheduled-task targets) counted inherit-only ACEs, which grant
+  nothing on the object itself, and treated attribute/EA writes and DELETE
+  alone as "can replace". Both DACL decisions are now portable, unit-tested
+  functions (`Core::Text::GrantsServiceReconfiguration`,
+  `GrantsFileModification`, `AceAppliesToObject`).
+- **Hardening audit-policy controls re-applied on every `-Apply`**: the
+  `auditpol` output array was piped into `Select-String` as a single object,
+  so the CSV field split never saw a row.
+- The Windows end-to-end test hardcoded the default module list and failed
+  once Privilege Escalation became default-on; it now derives the expected
+  list from the installed `config.json`.
+
+### Added
+
+- The Windows end-to-end test publishes the Critical/High finding profile of a
+  clean CI host as an annotation, and fails if a clean host produces more than
+  10 Critical findings, so false-positive floods cannot recur silently.
+- 5 unit tests for the DACL decisions, using real default Windows masks
+  (110 tests total).
+
 ## [1.7.0] — 2026-11-02
 
 ### Added — light Active Directory domain reconnaissance (`--domain`, opt-in)

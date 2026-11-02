@@ -66,6 +66,29 @@ bool IsLoopbackIpv4(const WString& text);
 // whichever comes first, and never reads past `byte_count`.
 WString RegistryBufferToString(const wchar_t* data, size_t byte_count);
 
+// --- DACL decisions --------------------------------------------------------
+// Portable so they are unit-tested natively; the values are the documented
+// Win32 access-right constants.
+
+// True unless the ACE is inherit-only (INHERIT_ONLY_ACE, 0x08): such an ACE
+// only describes what child objects receive and grants nothing on the object
+// itself.
+bool AceAppliesToObject(uint8_t ace_flags);
+
+// True if a service ACE mask lets its holder reconfigure the service
+// (SERVICE_CHANGE_CONFIG, WRITE_DAC, WRITE_OWNER, GENERIC_WRITE/ALL).
+// Read, query, start and stop rights do not count. Previously the check
+// tested `mask & SERVICE_ALL_ACCESS`, which is non-zero for *any* service
+// right, so the read access every standard service grants to Authenticated
+// Users / INTERACTIVE was reported as a Critical privilege escalation.
+bool GrantsServiceReconfiguration(uint32_t mask);
+
+// True if a file/directory ACE mask lets its holder replace or plant content:
+// FILE_WRITE_DATA (add file), FILE_APPEND_DATA (add subdirectory), WRITE_DAC,
+// WRITE_OWNER, GENERIC_WRITE/ALL. Attribute/EA writes and DELETE alone do not
+// allow replacing a binary and are not counted.
+bool GrantsFileModification(uint32_t mask);
+
 // Makes an attacker-influenced name (e.g. a process name) safe to use as a
 // single file-name component: anything other than [A-Za-z0-9._-] becomes
 // '_', leading dots are replaced, and the result is capped at 64 characters.

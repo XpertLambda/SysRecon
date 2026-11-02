@@ -460,10 +460,9 @@ bool IsWritableByNonAdmin(const String& path, StringVector* principals) {
     };
     constexpr size_t kWatch = sizeof(watch) / sizeof(watch[0]);
 
-    // Rights that allow replacing or altering the target.
-    const DWORD dangerous = FILE_WRITE_DATA | FILE_APPEND_DATA |
-                            FILE_WRITE_ATTRIBUTES | FILE_WRITE_EA |
-                            WRITE_DAC | WRITE_OWNER | DELETE | GENERIC_WRITE | GENERIC_ALL;
+    // Rights that allow replacing or planting content: see
+    // Core::Text::GrantsFileModification. Attribute/EA writes and DELETE alone
+    // used to count, flagging objects nobody could actually replace.
 
     // First pass: principals explicitly DENIED a dangerous right.
     bool denied[kWatch] = { false };
@@ -472,8 +471,9 @@ bool IsWritableByNonAdmin(const String& path, StringVector* principals) {
         if (!GetAce(dacl, i, &ace)) continue;
         ACE_HEADER* hdr = reinterpret_cast<ACE_HEADER*>(ace);
         if (hdr->AceType != ACCESS_DENIED_ACE_TYPE) continue;
+        if (!Text::AceAppliesToObject(hdr->AceFlags)) continue;
         ACCESS_DENIED_ACE* deny = reinterpret_cast<ACCESS_DENIED_ACE*>(ace);
-        if ((deny->Mask & dangerous) == 0) continue;
+        if (!Text::GrantsFileModification(deny->Mask)) continue;
         PSID aceSid = reinterpret_cast<PSID>(&deny->SidStart);
         for (size_t w = 0; w < kWatch; ++w) {
             if (watch[w].sid && EqualSid(aceSid, watch[w].sid)) denied[w] = true;
@@ -487,14 +487,20 @@ bool IsWritableByNonAdmin(const String& path, StringVector* principals) {
         if (!GetAce(dacl, i, &ace)) continue;
         ACE_HEADER* hdr = reinterpret_cast<ACE_HEADER*>(ace);
         if (hdr->AceType != ACCESS_ALLOWED_ACE_TYPE) continue;
+        // Inherit-only ACEs (e.g. "Users may create files in *subfolders*")
+        // grant nothing on this object itself.
+        if (!Text::AceAppliesToObject(hdr->AceFlags)) continue;
         ACCESS_ALLOWED_ACE* allow = reinterpret_cast<ACCESS_ALLOWED_ACE*>(ace);
-        if ((allow->Mask & dangerous) == 0) continue;
+        if (!Text::GrantsFileModification(allow->Mask)) continue;
         PSID aceSid = reinterpret_cast<PSID>(&allow->SidStart);
         for (size_t w = 0; w < kWatch; ++w) {
             if (denied[w]) continue;
             if (watch[w].sid && EqualSid(aceSid, watch[w].sid)) {
                 writable = true;
-                if (principals) principals->push_back(watch[w].label);
+                if (principals && std::find(principals->begin(), principals->end(),
+                                            String(watch[w].label)) == principals->end()) {
+                    principals->push_back(watch[w].label);
+                }
             }
         }
     }

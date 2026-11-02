@@ -816,7 +816,11 @@ function Invoke-Control-AuditPolicy {
                 # setting is column 4; reading the last column (Exclusion,
                 # always empty) made every audit control look non-compliant
                 # and re-apply on every run.
-                $line = (Invoke-Native auditpol.exe @('/get', "/subcategory:$($x.n)", '/r') -AllowFailure |
+                # @(...) enumerates the lines: Invoke-Native returns its array
+                # as one pipeline object (`return , $output`), and piping that
+                # straight into Select-String stringified every line into one,
+                # so the field split below never saw a single CSV row.
+                $line = (@(Invoke-Native auditpol.exe @('/get', "/subcategory:$($x.n)", '/r') -AllowFailure) |
                         Select-String -Pattern ([regex]::Escape($x.n)) | Select-Object -First 1)
                 $fields = if ($line) { @($line.ToString() -split ',') } else { @() }
                 if ($fields.Count -ge 5) {

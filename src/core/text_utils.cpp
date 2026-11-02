@@ -228,6 +228,31 @@ WString RegistryBufferToString(const wchar_t* data, size_t byte_count) {
     return WString(data, len);
 }
 
+namespace {
+constexpr uint8_t kInheritOnlyAce = 0x08;
+
+constexpr uint32_t kServiceChangeConfig = 0x00000002;
+constexpr uint32_t kFileWriteData       = 0x00000002;  // FILE_ADD_FILE on directories
+constexpr uint32_t kFileAppendData      = 0x00000004;  // FILE_ADD_SUBDIRECTORY on directories
+constexpr uint32_t kWriteDac            = 0x00040000;
+constexpr uint32_t kWriteOwner          = 0x00080000;
+constexpr uint32_t kGenericAll          = 0x10000000;
+constexpr uint32_t kGenericWrite        = 0x40000000;
+}  // namespace
+
+bool AceAppliesToObject(uint8_t ace_flags) {
+    return (ace_flags & kInheritOnlyAce) == 0;
+}
+
+bool GrantsServiceReconfiguration(uint32_t mask) {
+    return (mask & (kServiceChangeConfig | kWriteDac | kWriteOwner | kGenericWrite | kGenericAll)) != 0;
+}
+
+bool GrantsFileModification(uint32_t mask) {
+    return (mask & (kFileWriteData | kFileAppendData | kWriteDac | kWriteOwner |
+                    kGenericWrite | kGenericAll)) != 0;
+}
+
 WString SanitizeFileName(const WString& name) {
     WString out;
     out.reserve(name.size());

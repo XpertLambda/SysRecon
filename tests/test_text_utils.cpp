@@ -94,3 +94,51 @@ TEST(SanitizeFileName, KeepsOrdinaryNamesAndCapsLength) {
     EXPECT_EQ(SanitizeFileName(L""), L"unnamed");
     EXPECT_EQ(SanitizeFileName(WString(200, L'a')).size(), 64u);
 }
+
+// --- DACL decisions ---------------------------------------------------------
+// Real masks from default Windows security descriptors. The service check used
+// `mask & SERVICE_ALL_ACCESS`, true for any right at all, which produced ~260
+// Critical "weak service permissions" findings on a clean Windows install.
+
+TEST(ServiceDacl, ReadAndControlRightsAreNotReconfiguration) {
+    // CCLCSWLOCRRC: the standard grant to INTERACTIVE / Authenticated Users.
+    EXPECT_FALSE(GrantsServiceReconfiguration(0x0002018D));
+    // + RP/WP (start/stop): still not a privilege escalation.
+    EXPECT_FALSE(GrantsServiceReconfiguration(0x000201FD));
+    EXPECT_FALSE(GrantsServiceReconfiguration(0x80000000));  // GENERIC_READ
+    EXPECT_FALSE(GrantsServiceReconfiguration(0));
+}
+
+TEST(ServiceDacl, ReconfigurationRightsAreFlagged) {
+    EXPECT_TRUE(GrantsServiceReconfiguration(0x00000002));  // SERVICE_CHANGE_CONFIG
+    EXPECT_TRUE(GrantsServiceReconfiguration(0x00040000));  // WRITE_DAC
+    EXPECT_TRUE(GrantsServiceReconfiguration(0x00080000));  // WRITE_OWNER
+    EXPECT_TRUE(GrantsServiceReconfiguration(0x000F01FF));  // SERVICE_ALL_ACCESS
+    EXPECT_TRUE(GrantsServiceReconfiguration(0x10000000));  // GENERIC_ALL
+    EXPECT_TRUE(GrantsServiceReconfiguration(0x40000000));  // GENERIC_WRITE
+}
+
+TEST(FileDacl, ReadExecuteIsNotModification) {
+    EXPECT_FALSE(GrantsFileModification(0x001200A9));  // Read & execute
+    EXPECT_FALSE(GrantsFileModification(0x00120089));  // Read
+    EXPECT_FALSE(GrantsFileModification(0x00000100));  // FILE_WRITE_ATTRIBUTES only
+    EXPECT_FALSE(GrantsFileModification(0x00000010));  // FILE_WRITE_EA only
+    EXPECT_FALSE(GrantsFileModification(0x00010000));  // DELETE only
+}
+
+TEST(FileDacl, WriteRightsAreModification) {
+    EXPECT_TRUE(GrantsFileModification(0x001301BF));  // Modify
+    EXPECT_TRUE(GrantsFileModification(0x001F01FF));  // Full control
+    EXPECT_TRUE(GrantsFileModification(0x00000002));  // FILE_WRITE_DATA / add file
+    EXPECT_TRUE(GrantsFileModification(0x00000004));  // FILE_APPEND_DATA / add subdirectory
+    EXPECT_TRUE(GrantsFileModification(0x00040000));  // WRITE_DAC
+    EXPECT_TRUE(GrantsFileModification(0x40000000));  // GENERIC_WRITE
+}
+
+TEST(AceFlags, InheritOnlyAcesDoNotApplyToTheObject) {
+    EXPECT_TRUE(AceAppliesToObject(0x00));
+    EXPECT_TRUE(AceAppliesToObject(0x03));   // OBJECT_INHERIT | CONTAINER_INHERIT
+    EXPECT_FALSE(AceAppliesToObject(0x08));  // INHERIT_ONLY
+    EXPECT_FALSE(AceAppliesToObject(0x0B));  // OI | CI | IO
+    EXPECT_TRUE(AceAppliesToObject(0x10));   // INHERITED_ACE alone still applies
+}

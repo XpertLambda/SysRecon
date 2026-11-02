@@ -1,6 +1,7 @@
 #include "../../include/modules/privesc/privesc_analyzer.h"
 #include "../../include/core/utils.h"
 #include "../../include/core/whitelist.h"
+#include "../../include/core/text_utils.h"
 
 #ifdef _WIN32
 #include <objbase.h>
@@ -236,24 +237,26 @@ bool PrivEscAnalyzer::ServiceDaclIsWeak(const String& service_name, StringVector
         { interactive, L"INTERACTIVE" },
     };
 
-    // Rights that let a principal hijack the service (reconfigure binary/account
-    // or take ownership of the object).
-    const DWORD dangerous = SERVICE_CHANGE_CONFIG | WRITE_DAC | WRITE_OWNER |
-                            SERVICE_ALL_ACCESS | GENERIC_WRITE | GENERIC_ALL;
-
+    // Only rights that let a principal hijack the service (reconfigure its
+    // binary/account, or take over its DACL/owner) count -- see
+    // Core::Text::GrantsServiceReconfiguration for why this is not
+    // `mask & SERVICE_ALL_ACCESS`.
     bool weak = false;
     for (DWORD i = 0; i < dacl->AceCount; ++i) {
         LPVOID ace = nullptr;
         if (!GetAce(dacl, i, &ace)) continue;
         ACE_HEADER* hdr = reinterpret_cast<ACE_HEADER*>(ace);
         if (hdr->AceType != ACCESS_ALLOWED_ACE_TYPE) continue;
+        if (!Core::Text::AceAppliesToObject(hdr->AceFlags)) continue;
         ACCESS_ALLOWED_ACE* allow = reinterpret_cast<ACCESS_ALLOWED_ACE*>(ace);
-        if ((allow->Mask & dangerous) == 0) continue;
+        if (!Core::Text::GrantsServiceReconfiguration(allow->Mask)) continue;
         PSID aceSid = reinterpret_cast<PSID>(&allow->SidStart);
         for (const auto& w : watch) {
             if (w.sid && EqualSid(aceSid, w.sid)) {
                 weak = true;
-                principals.push_back(w.label);
+                if (std::find(principals.begin(), principals.end(), w.label) == principals.end()) {
+                    principals.push_back(w.label);
+                }
             }
         }
     }
