@@ -186,6 +186,18 @@ if ($json) {
     $critical = @($serious | Where-Object risk_level -eq 'Critical').Count
     Write-Annotation notice "Default scan on a clean host: $critical Critical, $($serious.Count - $critical) High`n$summary"
     Assert-True ($critical -le 10) "clean host does not produce a flood of Critical findings ($critical)"
+    # Firewall-rule findings with the fields that decide them, so a
+    # false-positive class can be diagnosed from the annotation alone.
+    $rules = @($report.results | Where-Object { $_.module -eq 'Firewall' -and $_.item -like 'Inbound *:*' })
+    if ($rules.Count -gt 0) {
+        $lines = $rules | Select-Object -First 6 | ForEach-Object {
+            $d = $_.details
+            "$($_.risk_level) | $($d.Rule) | program=$($d.Program) service=$($d.Service) ports=$($d.'Local Ports') " +
+            "remote=$($d.'Remote Addresses') profiles=$($d.Profiles) package=$($d.'App Package') " +
+            "owner=$($d.'Local User Owner') group=$($d.Group)"
+        }
+        Write-Annotation notice "Firewall rule findings on a clean host: $($rules.Count)`n$($lines -join "`n")"
+    }
     Assert-True (@($report.results | Where-Object { $_.module -eq 'User Accounts' }).Count -gt 0) 'local accounts enumerated'
     Copy-Item -Recurse -Force -LiteralPath $ReportsDir -Destination (Join-Path $OutDir 'installed-reports')
 }

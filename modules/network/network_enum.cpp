@@ -645,7 +645,10 @@ bool NetworkEnumerator::AnalyzeFirewallRules() {
     IUnknown* enum_unknown = nullptr;
     IEnumVARIANT* rule_enum = nullptr;
 
-    struct Flagged { int severity; String name; String ports; String remote; String program; String service; long profiles; };
+    struct Flagged {
+        int severity; String name; String ports; String remote; String program; String service; long profiles;
+        String package; String owner; String grouping;
+    };
     std::map<String, Flagged> flagged;   // keyed by rule name: built-in rules are often duplicated
     size_t total_rules = 0;
 
@@ -698,21 +701,28 @@ bool NetworkEnumerator::AnalyzeFirewallRules() {
                     b = nullptr;
                     // Store-app rules are scoped by package SID, not by path.
                     INetFwRule3* rule3 = nullptr;
+                    String owner;
                     if (SUCCEEDED(rule->QueryInterface(kIidINetFwRule3, reinterpret_cast<void**>(&rule3))) &&
                         rule3) {
                         if (SUCCEEDED(rule3->get_LocalAppPackageId(&b))) view.app_package = bstr(b);
+                        b = nullptr;
+                        if (SUCCEEDED(rule3->get_LocalUserOwner(&b))) owner = bstr(b);
                         b = nullptr;
                         rule3->Release();
                     }
                     const int severity = Core::Text::FirewallRuleSeverity(view);
                     if (severity > 0) {
-                        String name;
+                        String name, grouping;
                         if (SUCCEEDED(rule->get_Name(&b))) name = bstr(b);
+                        b = nullptr;
+                        if (SUCCEEDED(rule->get_Grouping(&b))) grouping = bstr(b);
+                        b = nullptr;
                         if (name.empty()) name = L"(unnamed rule)";
                         auto& f = flagged[name];
                         if (severity > f.severity) {
                             f = {severity, name, view.local_ports, view.remote_addresses,
-                                 view.application, view.service, profiles};
+                                 view.application, view.service, profiles,
+                                 view.app_package, owner, grouping};
                         }
                     }
                 }
@@ -750,6 +760,9 @@ bool NetworkEnumerator::AnalyzeFirewallRules() {
         result.details[L"Program"] = f.program.empty() ? String(L"Any") : f.program;
         result.details[L"Service"] = (f.service.empty() || f.service == L"*") ? String(L"Any") : f.service;
         result.details[L"Profiles"] = profile_names(f.profiles);
+        if (!f.package.empty()) result.details[L"App Package"] = f.package;
+        if (!f.owner.empty()) result.details[L"Local User Owner"] = f.owner;
+        if (!f.grouping.empty()) result.details[L"Group"] = f.grouping;
         result.details[L"Technique"] = L"T1562.004 Impair Defenses: Disable or Modify System Firewall";
         if (f.severity >= 3) {
             result.item_name = L"Inbound rule allows all traffic: " + name;
