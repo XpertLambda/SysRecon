@@ -4,6 +4,25 @@ All notable changes to SysRecon are documented here.
 
 ## [Unreleased]
 
+## [1.7.0] — 2026-11-02
+
+### Added — light Active Directory domain reconnaissance (`--domain`, opt-in)
+
+- New **Domain** module (`modules/domain/`), off by default and gated behind
+  `--domain` / `modules.domain.enabled`. It only acts on a domain-joined host
+  and performs standard read-only directory lookups any domain user can make:
+  - domain / domain-controller / forest (via `DsGetDcNameW`);
+  - the domain **password and lockout policy** (`NetUserModalsGet`), flagging a
+    minimum length below 14, non-expiring passwords, and disabled lockout;
+  - **Domain Admins** membership (`NetGroupGetUsers`), flagged when the group is
+    large (big privileged blast radius);
+  - **domain trusts** (`DsEnumerateDomainTrustsW`), with direction.
+- Each finding carries remediation and a MITRE ATT&CK / CIS reference. On a
+  standalone/workgroup host the module does nothing.
+
+> Read-only situational awareness only: it never authenticates elsewhere,
+> modifies the directory, or requests credentials.
+
 ## [1.6.0] — 2026-11-02
 
 ### Added — Tier 4 pen-tester workflow / output

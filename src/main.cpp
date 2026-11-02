@@ -36,6 +36,7 @@ struct CommandLineOptions {
     bool registry_only = false;
     bool memory_only = false;
     bool privesc_only = false;
+    bool domain_only = false;
     bool selective_scan = false;
 
     // Tier-4 workflow options.
@@ -97,6 +98,7 @@ void PrintHelp() {
     std::wcout << L"  --registry              Persistence keys, security policy, key ACLs\n";
     std::wcout << L"  --memory                Process memory analysis (slow; EDR-visible)\n";
     std::wcout << L"  --privesc               Local privilege-escalation assessment\n";
+    std::wcout << L"  --domain                Light AD domain recon (domain-joined hosts; opt-in)\n";
     std::wcout << L"  --all                   All modules, including Memory\n";
     std::wcout << L"  Without a module flag, the modules enabled in config.json run\n";
     std::wcout << L"  (Memory is off by default).\n";
@@ -520,6 +522,12 @@ bool ParseArguments(int argc, wchar_t* argv[], CommandLineOptions& options) {
             continue;
         }
 
+        if (arg == L"--domain") {
+            options.domain_only = true;
+            options.selective_scan = true;
+            continue;
+        }
+
         if (arg == L"--all") {
             options.accounts_only = options.services_only = options.processes_only = true;
             options.network_only = options.registry_only = options.memory_only = true;
@@ -562,6 +570,7 @@ CliModuleRequest BuildModuleRequest(const CommandLineOptions& options) {
     req.modules.registry = options.registry_only;
     req.modules.memory = options.memory_only;
     req.modules.privesc = options.privesc_only;
+    req.modules.domain = options.domain_only;
     return req;
 }
 

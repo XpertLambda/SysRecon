@@ -75,6 +75,7 @@ namespace SysRecon {
         Registry,
         Memory,
         PrivEsc,
+        Domain,
         EventLogs,
         FileSystem
     };

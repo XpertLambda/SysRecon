@@ -78,7 +78,7 @@ TEST(ResolveModules, AllSelectsEverything) {
     CliModuleRequest req;
     req.explicit_selection = true;
     req.modules = ModuleSelection::All();
-    EXPECT_EQ(ResolveModules(ShippedConfig(), req, false).Count(), 7u);
+    EXPECT_EQ(ResolveModules(ShippedConfig(), req, false).Count(), 8u);
 }
 
 TEST(ResolveModules, ExplainsCliOverrideOfConfig) {

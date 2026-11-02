@@ -25,6 +25,7 @@ const std::map<std::string, std::set<std::string>>& ModuleSchema() {
         {"registry",  {"enabled", "scan_startup_keys", "analyze_policies", "check_permissions", "custom_keys"}},
         {"memory",    {"enabled", "create_dumps", "scan_for_malware", "max_dump_size_mb"}},
         {"privesc",   {"enabled", "check_services", "check_registry", "check_filesystem", "check_credentials", "verify_signatures", "check_tokens", "check_scheduled_tasks", "check_patches", "check_defender", "check_hardening"}},
+        {"domain",    {"enabled"}},
     };
     return schema;
 }
@@ -211,6 +212,9 @@ bool ConfigManager::LoadFromFile(const String& filename) {
                 r.Bool(*pe, "modules.privesc", "check_defender", parsed.privesc.check_defender);
                 r.Bool(*pe, "modules.privesc", "check_hardening", parsed.privesc.check_hardening);
             }
+            if (const json* dom = section("domain")) {
+                r.Bool(*dom, "modules.domain", "enabled", parsed.domain.enabled);
+            }
         }
 
         if (j.contains("output")) {
@@ -298,6 +302,7 @@ bool ConfigManager::SaveToFile(const String& filename) const {
         j["modules"]["privesc"]["check_patches"] = config_.privesc.check_patches;
         j["modules"]["privesc"]["check_defender"] = config_.privesc.check_defender;
         j["modules"]["privesc"]["check_hardening"] = config_.privesc.check_hardening;
+        j["modules"]["domain"]["enabled"] = config_.domain.enabled;
 
         j["output"]["output_directory"] = Utils::WideToUtf8(config_.output.output_directory);
         j["output"]["generate_json"] = config_.output.generate_json;
@@ -338,6 +343,7 @@ bool ConfigManager::IsModuleEnabled(ModuleType module) const {
         case ModuleType::Registry:  return config_.registry.enabled;
         case ModuleType::Memory:    return config_.memory.enabled;
         case ModuleType::PrivEsc:   return config_.privesc.enabled;
+        case ModuleType::Domain:    return config_.domain.enabled;
         default:                    return false;
     }
 }

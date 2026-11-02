@@ -23,6 +23,7 @@ struct ModuleSelection {
     bool registry = false;
     bool memory = false;
     bool privesc = false;
+    bool domain = false;
 
     bool IsEnabled(ModuleType module) const;
     void Set(ModuleType module, bool enabled);

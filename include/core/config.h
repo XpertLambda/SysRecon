@@ -70,6 +70,12 @@ struct ScanConfig {
         bool check_defender = true;      // Defender status, exclusions, ASR rules
         bool check_hardening = true;     // SMB/LLMNR/NTLM/LAPS/PS-logging posture
     } privesc;
+
+    // Domain recon is opt-in (like memory): off unless requested with --domain
+    // or enabled here, and it only does anything on a domain-joined host.
+    struct {
+        bool enabled = false;
+    } domain;
     
     // Output settings
     struct {

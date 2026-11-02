@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(SysRecon VERSION 1.6.0 LANGUAGES CXX)
+project(SysRecon VERSION 1.7.0 LANGUAGES CXX)
 
 # Set C++ standard
 set(CMAKE_CXX_STANDARD 20)
@@ -81,6 +81,7 @@ set(SOURCES
     modules/registry/registry_analyzer.cpp
     modules/memory/memory_analyzer.cpp
     modules/privesc/privesc_analyzer.cpp
+    modules/domain/domain_recon.cpp
     modules/reporting/report_generator.cpp
 )
 
@@ -100,6 +101,7 @@ set(HEADERS
     include/modules/registry/registry_analyzer.h
     include/modules/memory/memory_analyzer.h
     include/modules/privesc/privesc_analyzer.h
+    include/modules/domain/domain_recon.h
     include/modules/reporting/report_generator.h
 )
 

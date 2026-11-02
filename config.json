@@ -46,6 +46,9 @@
             "check_patches": true,
             "check_defender": true,
             "check_hardening": true
+        },
+        "domain": {
+            "enabled": false
         }
     },
     "output": {

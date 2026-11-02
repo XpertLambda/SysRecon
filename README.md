@@ -36,7 +36,7 @@ SysRecon is an enterprise-class security assessment platform designed to provide
 
 ### Key Differentiators
 
-- **Comprehensive Coverage**: Seven specialized assessment modules covering user accounts, services, processes, network infrastructure, registry configurations, memory forensics, and local privilege escalation
+- **Comprehensive Coverage**: Eight specialized assessment modules covering user accounts, services, processes, network infrastructure, registry configurations, memory forensics, local privilege escalation, and (opt-in) light Active Directory reconnaissance
 - **Actionable by Design**: Privilege-escalation findings carry a remediation step and a MITRE ATT&CK reference, turning raw audit output into a prioritized fix list
 - **Enterprise Architecture**: Built with C++20 for optimal performance and minimal system footprint
 - **Flexible Deployment**: Cross-platform compilation support with native Windows execution
@@ -148,6 +148,18 @@ reads a secret value):
 
 > SysRecon never exploits a finding or extracts a secret: credential checks
 > report presence and location only.
+
+#### Light Domain Reconnaissance (`--domain`, opt-in)
+
+Off by default; enable with `--domain` (or `modules.domain.enabled`). Only acts
+on a domain-joined host, performing read-only directory lookups any domain user
+can make — it never authenticates elsewhere or modifies the directory:
+
+- Domain / domain-controller / forest (`DsGetDcName`)
+- Domain password & lockout policy — flags weak minimum length, non-expiring
+  passwords, disabled lockout (CIS Account Policies)
+- Domain Admins membership — flagged when the group is large (T1078.002)
+- Domain trusts and their direction (T1482)
 
 ### Reporting & Intelligence
 

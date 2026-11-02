@@ -205,6 +205,7 @@ bool ScanEngine::RunFullScan() {
             { ModuleType::Registry,  L"Registry",      registry_analyzer_ != nullptr },
             { ModuleType::Memory,    L"Memory",        memory_analyzer_ != nullptr },
             { ModuleType::PrivEsc,   L"Privilege Escalation", privesc_analyzer_ != nullptr },
+            { ModuleType::Domain,    L"Domain",        domain_recon_ != nullptr },
         };
 
         // Divide progress across the modules that will actually run.
@@ -395,6 +396,14 @@ bool ScanEngine::RunModuleScan(ModuleType module) {
             }
             break;
 
+        case ModuleType::Domain:
+            if (domain_recon_) {
+                return run_all(L"Domain", {
+                    {L"domain reconnaissance", [&] { return domain_recon_->RunAllChecks(); }},
+                });
+            }
+            break;
+
         default:
             return false;
     }
@@ -410,6 +419,7 @@ void ScanEngine::DestroyModules() {
     registry_analyzer_.reset();
     memory_analyzer_.reset();
     privesc_analyzer_.reset();
+    domain_recon_.reset();
     report_generator_.reset();
 }
 
@@ -438,6 +448,7 @@ void ScanEngine::CollectResults() {
     if (registry_analyzer_) collect(registry_analyzer_->GetScanResults(), L"registry");
     if (memory_analyzer_)   collect(memory_analyzer_->GetScanResults(), L"memory");
     if (privesc_analyzer_)  collect(privesc_analyzer_->GetScanResults(), L"privilege-escalation");
+    if (domain_recon_)      collect(domain_recon_->GetScanResults(), L"domain");
 
     // Drop anything below the configured minimum severity (CLI --min-severity).
     if (min_severity_ != SecurityLevel::Low) {
@@ -550,6 +561,7 @@ bool ScanEngine::InitializeModules() {
     if (selection_.registry)  { registry_analyzer_ = std::make_unique<Modules::RegistryAnalyzer>(); init(registry_analyzer_, L"Registry"); }
     if (selection_.memory)    { memory_analyzer_ = std::make_unique<Modules::MemoryAnalyzer>();    init(memory_analyzer_, L"Memory"); }
     if (selection_.privesc)   { privesc_analyzer_ = std::make_unique<Modules::PrivEscAnalyzer>(); init(privesc_analyzer_, L"Privilege Escalation"); }
+    if (selection_.domain)    { domain_recon_ = std::make_unique<Modules::DomainReconAnalyzer>(); init(domain_recon_, L"Domain"); }
 
     report_generator_ = std::make_unique<Modules::ReportGenerator>();
     return all_success;
