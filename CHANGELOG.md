@@ -4,6 +4,8 @@ All notable changes to SysRecon are documented here.
 
 ## [Unreleased]
 
+## [1.7.1] — 2026-11-02
+
 ### Fixed — found by the Windows CI jobs on real Windows
 
 - **~260 false Critical "weak service permissions" findings on a clean
@@ -42,6 +44,12 @@ All notable changes to SysRecon are documented here.
   10 Critical findings, so false-positive floods cannot recur silently.
 - Unit tests for the DACL decisions (using real default Windows masks) and for
   the Defender-platform and VC++-runtime whitelist fixes (113 tests total).
+
+### Changed
+
+- README version, installer filenames and test counts were still those of
+  1.2.0; they now match this release. `HANDOFF.md` rewritten for the current
+  state (real-Windows CI, how to read its public annotations, backlog).
 
 ## [1.7.0] — 2026-11-02
 

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(SysRecon VERSION 1.7.0 LANGUAGES CXX)
+project(SysRecon VERSION 1.7.1 LANGUAGES CXX)
 
 # Set C++ standard
 set(CMAKE_CXX_STANDARD 20)
