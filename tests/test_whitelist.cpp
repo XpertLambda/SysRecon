@@ -195,3 +195,28 @@ TEST(TrustedPath, OperatorCanWhitelistOrgSpecificLocation) {
     // Boundary rule still applies to operator-supplied entries.
     EXPECT_FALSE(wl.IsSystemPath(L"D:\\CorpToolsEvil\\agent.exe"));
 }
+
+// --- False positives seen on a clean Windows host (CI) ----------------------
+
+TEST(DefenderPlatform, EngineRunningFromPlatformFolderIsGenuine) {
+    // Defender platform updates move MsMpEng.exe out of Program Files; it was
+    // reported as masquerading (T1036.005) on every up-to-date Windows host.
+    EXPECT_TRUE(WL().IsSystemProcess(L"MsMpEng.exe",
+        L"C:\\ProgramData\\Microsoft\\Windows Defender\\Platform\\4.18.24090.11-0\\MsMpEng.exe"));
+    EXPECT_TRUE(WL().IsSystemProcess(L"NisSrv.exe",
+        L"C:\\ProgramData\\Microsoft\\Windows Defender\\Platform\\4.18.24090.11-0\\NisSrv.exe"));
+}
+
+TEST(DefenderPlatform, BoundaryStillApplies) {
+    EXPECT_FALSE(WL().IsSystemProcess(L"MsMpEng.exe",
+        L"C:\\ProgramData\\Microsoft\\Windows Defender\\PlatformX\\MsMpEng.exe"));
+    EXPECT_FALSE(WL().IsSystemProcess(L"MsMpEng.exe", L"C:\\ProgramData\\MsMpEng.exe"));
+}
+
+TEST(SystemDllName, VisualCppRedistributablesAreNotCoreSystemDlls) {
+    // Shipped app-local by countless applications; flagging them as DLL
+    // side-loading (T1574.002) was noise on every host.
+    EXPECT_FALSE(WL().IsSystemDllName(L"vcruntime140.dll"));
+    EXPECT_FALSE(WL().IsSystemDllName(L"MSVCP140.dll"));
+    EXPECT_TRUE(WL().IsSystemDllName(L"kernel32.dll"));
+}

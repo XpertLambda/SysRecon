@@ -19,9 +19,18 @@ All notable changes to SysRecon are documented here.
   alone as "can replace". Both DACL decisions are now portable, unit-tested
   functions (`Core::Text::GrantsServiceReconfiguration`,
   `GrantsFileModification`, `AceAppliesToObject`).
-- **Hardening audit-policy controls re-applied on every `-Apply`**: the
-  `auditpol` output array was piped into `Select-String` as a single object,
-  so the CSV field split never saw a row.
+- **Hardening audit-policy controls re-applied on every `-Apply`**:
+  `Invoke-Native` returned its output with `return , $output`, which keeps the
+  array as one pipeline object that neither piping nor `@(...)` unwraps, so
+  `Select-String` saw every `auditpol` line joined into one string. It now
+  returns the lines normally.
+- **Defender reported as masquerading malware**: `MsMpEng.exe` / `NisSrv.exe`
+  run from `C:\ProgramData\Microsoft\Windows Defender\Platform\<version>`
+  after platform updates, which was not a trusted path (High, T1036.005, on
+  every up-to-date host).
+- **Visual C++ runtime DLLs reported as DLL side-loading**: `vcruntime140.dll`
+  and `msvcp140.dll` were on the core-system-DLL list, but applications ship
+  them app-local by design.
 - The Windows end-to-end test hardcoded the default module list and failed
   once Privilege Escalation became default-on; it now derives the expected
   list from the installed `config.json`.
@@ -31,8 +40,8 @@ All notable changes to SysRecon are documented here.
 - The Windows end-to-end test publishes the Critical/High finding profile of a
   clean CI host as an annotation, and fails if a clean host produces more than
   10 Critical findings, so false-positive floods cannot recur silently.
-- 5 unit tests for the DACL decisions, using real default Windows masks
-  (110 tests total).
+- Unit tests for the DACL decisions (using real default Windows masks) and for
+  the Defender-platform and VC++-runtime whitelist fixes (113 tests total).
 
 ## [1.7.0] — 2026-11-02
 

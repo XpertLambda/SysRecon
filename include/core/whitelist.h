@@ -96,7 +96,10 @@ inline SystemWhitelist::SystemWhitelist() {
         L"ntdll.dll", L"kernel32.dll", L"kernelbase.dll", L"user32.dll",
         L"gdi32.dll", L"advapi32.dll", L"ole32.dll", L"oleaut32.dll",
         L"shell32.dll", L"comctl32.dll", L"comdlg32.dll", L"ws2_32.dll",
-        L"msvcrt.dll", L"msvcp140.dll", L"vcruntime140.dll",
+        // Not msvcp140/vcruntime140: those are Visual C++ redistributables
+        // that applications legitimately ship app-local, so their presence
+        // outside System32 is not side-loading evidence.
+        L"msvcrt.dll",
         L"ucrtbase.dll", L"bcrypt.dll", L"crypt32.dll", L"sechost.dll",
         L"rpcrt4.dll", L"imm32.dll", L"msctf.dll", L"clbcatq.dll"
     };
@@ -106,7 +109,10 @@ inline SystemWhitelist::SystemWhitelist() {
         L"c:\\windows\\syswow64",
         L"c:\\windows",
         L"c:\\program files\\windows defender",
-        L"c:\\program files (x86)\\windows defender"
+        L"c:\\program files (x86)\\windows defender",
+        // Defender platform updates run MsMpEng.exe / NisSrv.exe from here
+        // (versioned subfolders). Writable only by SYSTEM/TrustedInstaller.
+        L"c:\\programdata\\microsoft\\windows defender\\platform"
     };
 
     known_persistence_names_ = {
