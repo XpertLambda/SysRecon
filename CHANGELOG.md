@@ -32,7 +32,8 @@ All notable changes to SysRecon are documented here.
   resolved findings. **`--new-only`** reports only new findings; with
   `--exit-code` it fails a pipeline only on regressions.
 - **Network**: firewall rules are reviewed through `INetFwPolicy2`; an enabled
-  inbound allow rule open to any address on any port for any program is High,
+  inbound allow rule open to any address on any port for any program (and not
+  scoped to a Store-app package) is High,
   and remote-administration / file-sharing ports open to any address on the
   Public profile are Medium. Listening ports name the service(s) hosted by the
   owning process.

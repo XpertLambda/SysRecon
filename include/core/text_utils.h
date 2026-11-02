@@ -146,13 +146,18 @@ struct FirewallRuleView {
     WString remote_addresses;        // "*" = any
     WString local_ports;             // "*" = any
     WString application;             // Empty = any program
+    // Package SID of a Store/UWP app the rule is scoped to (INetFwRule3
+    // LocalAppPackageId). Such rules leave `application` empty but only
+    // admit that app's listeners.
+    WString app_package;
     WString service;                 // Empty or "*" = any service
     int protocol = 256;              // IANA number; 256 = any
 };
 
 // 3 (High): enabled inbound allow rule open to any remote address, on any
 // local port, for any program and service -- the firewall does nothing for
-// that traffic. 2 (Medium): enabled inbound allow from any address, on the
+// that traffic (a rule scoped to an app package does not count: it only
+// admits that app). 2 (Medium): enabled inbound allow from any address, on the
 // Public profile, to a remote-administration or file-sharing port (22, 23,
 // 135, 139, 445, 3389, 5985, 5986). 0 otherwise.
 int FirewallRuleSeverity(const FirewallRuleView& rule);

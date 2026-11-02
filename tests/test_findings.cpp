@@ -105,7 +105,7 @@ TEST(Findings, ParseBaselineReadsReportsWithAndWithoutIds) {
     })json";
     Baseline b;
     String error;
-    ASSERT_TRUE(ParseBaseline(report, b, error)) << std::string(error.begin(), error.end());
+    ASSERT_TRUE(ParseBaseline(report, b, error));
     EXPECT_EQ(b.scan_timestamp, L"20261102_101500");
     ASSERT_EQ(b.entries.size(), 2u);
     EXPECT_EQ(b.entries[0].id, L"network/tcp-445-system");

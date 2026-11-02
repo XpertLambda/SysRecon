@@ -56,7 +56,9 @@ $PolicyModules = @('Account Policy', 'Firewall')
 function Invoke-Audit([string]$Name) {
     $dir = Join-Path $OutDir $Name
     Remove-Item -Recurse -Force -LiteralPath $dir -ErrorAction SilentlyContinue
-    $code = Invoke-Timed -File $SysRecon -Arguments "--accounts --network -f json -o `"$dir`"" -TimeoutSec 600 -Name $Name
+    # Individual firewall rules are not something the hardening script
+    # changes (it manages the service and profiles), so leave them out.
+    $code = Invoke-Timed -File $SysRecon -Arguments "--accounts --network --skip `"firewall/inbound-*`" -f json -o `"$dir`"" -TimeoutSec 600 -Name $Name
     Assert-True ($code -eq 0) "$Name exits 0 (got $code)"
     $json = Get-ChildItem -LiteralPath $dir -Filter 'scan_*.json' -ErrorAction SilentlyContinue | Select-Object -First 1
     Assert-True ($null -ne $json) "$Name produced a report"

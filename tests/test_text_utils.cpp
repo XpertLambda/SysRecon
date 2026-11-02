@@ -252,6 +252,14 @@ TEST(FirewallRules, Severity) {
     app.public_profile = true;
     EXPECT_EQ(FirewallRuleSeverity(app), 0);  // Program-scoped any-port rule.
 
+    // Built-in Store-app rules (Microsoft.Windows.ShellExperienceHost, ...):
+    // no program path, scoped by package SID. Real Windows CI flagged ~20 of
+    // these as "allows all traffic" before the package scope was read.
+    FirewallRuleView package = open;
+    package.app_package = L"S-1-15-2-1430448594-2639229838-973813799-439329657";
+    package.public_profile = true;
+    EXPECT_EQ(FirewallRuleSeverity(package), 0);
+
     FirewallRuleView rdp = open;
     rdp.local_ports = L"3389";
     rdp.protocol = 6;

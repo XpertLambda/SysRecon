@@ -627,6 +627,8 @@ bool NetworkEnumerator::AnalyzeFirewallRules() {
         {0x98325047, 0xC671, 0x4174, {0x8D, 0x81, 0xDE, 0xFC, 0xD3, 0xF0, 0x31, 0x86}};
     static const IID kIidINetFwRule =
         {0xAF230D27, 0xBABA, 0x4E42, {0xAC, 0xED, 0xF5, 0x24, 0xF2, 0x2C, 0xFC, 0xE2}};
+    static const IID kIidINetFwRule3 =
+        {0xB21563FF, 0xD696, 0x4222, {0xAB, 0x46, 0x4E, 0x89, 0xB7, 0x3A, 0xB3, 0x4A}};
     static const IID kIidIEnumVARIANT =
         {0x00020404, 0x0000, 0x0000, {0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
 
@@ -694,6 +696,14 @@ bool NetworkEnumerator::AnalyzeFirewallRules() {
                     b = nullptr;
                     if (SUCCEEDED(rule->get_ServiceName(&b))) view.service = bstr(b);
                     b = nullptr;
+                    // Store-app rules are scoped by package SID, not by path.
+                    INetFwRule3* rule3 = nullptr;
+                    if (SUCCEEDED(rule->QueryInterface(kIidINetFwRule3, reinterpret_cast<void**>(&rule3))) &&
+                        rule3) {
+                        if (SUCCEEDED(rule3->get_LocalAppPackageId(&b))) view.app_package = bstr(b);
+                        b = nullptr;
+                        rule3->Release();
+                    }
                     const int severity = Core::Text::FirewallRuleSeverity(view);
                     if (severity > 0) {
                         String name;
