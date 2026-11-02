@@ -190,11 +190,14 @@ if ($json) {
     # false-positive class can be diagnosed from the annotation alone.
     $rules = @($report.results | Where-Object { $_.module -eq 'Firewall' -and $_.item -like 'Inbound *:*' })
     if ($rules.Count -gt 0) {
+        # Optional detail keys are absent from the JSON; StrictMode throws on
+        # a missing property, so read them through PSObject.Properties.
         $lines = $rules | Select-Object -First 6 | ForEach-Object {
             $d = $_.details
-            "$($_.risk_level) | $($d.Rule) | program=$($d.Program) service=$($d.Service) ports=$($d.'Local Ports') " +
-            "remote=$($d.'Remote Addresses') profiles=$($d.Profiles) package=$($d.'App Package') " +
-            "owner=$($d.'Local User Owner') group=$($d.Group)"
+            $get = { param($n) $p = $d.PSObject.Properties[$n]; if ($p) { $p.Value } else { '' } }
+            "$($_.risk_level) | $(& $get 'Rule') | program=$(& $get 'Program') service=$(& $get 'Service') " +
+            "ports=$(& $get 'Local Ports') remote=$(& $get 'Remote Addresses') profiles=$(& $get 'Profiles') " +
+            "package=$(& $get 'App Package') owner=$(& $get 'Local User Owner') group=$(& $get 'Group')"
         }
         Write-Annotation notice "Firewall rule findings on a clean host: $($rules.Count)`n$($lines -join "`n")"
     }
