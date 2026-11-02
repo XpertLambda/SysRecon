@@ -53,7 +53,8 @@ TEST(ResolveModules, NoSelectionUsesConfig) {
     EXPECT_FALSE(s.network);
     EXPECT_FALSE(s.memory);
     EXPECT_TRUE(s.accounts);
-    EXPECT_EQ(s.Count(), 5u);
+    EXPECT_TRUE(s.eventlogs);
+    EXPECT_EQ(s.Count(), 6u);
 }
 
 TEST(ResolveModules, MissingConfigKeepsMemoryOff) {
@@ -61,7 +62,8 @@ TEST(ResolveModules, MissingConfigKeepsMemoryOff) {
     // including the memory module the README described as off by default.
     const ModuleSelection s = ResolveModules(ScanConfig{}, CliModuleRequest{}, false);
     EXPECT_FALSE(s.memory);
-    EXPECT_EQ(s.Count(), 6u);
+    EXPECT_FALSE(s.domain);
+    EXPECT_EQ(s.Count(), 7u);
 }
 
 TEST(ResolveModules, StealthDropsMemoryEvenWhenRequested) {
@@ -78,7 +80,15 @@ TEST(ResolveModules, AllSelectsEverything) {
     CliModuleRequest req;
     req.explicit_selection = true;
     req.modules = ModuleSelection::All();
-    EXPECT_EQ(ResolveModules(ShippedConfig(), req, false).Count(), 8u);
+    EXPECT_EQ(ResolveModules(ShippedConfig(), req, false).Count(), 9u);
+}
+
+TEST(ScanPlan, EventLogsRunAfterPrivEscAndBeforeDomain) {
+    const auto& order = AllScanModules();
+    const auto pos = [&](ModuleType m) { return std::find(order.begin(), order.end(), m) - order.begin(); };
+    EXPECT_LT(pos(ModuleType::PrivEsc), pos(ModuleType::EventLogs));
+    EXPECT_LT(pos(ModuleType::EventLogs), pos(ModuleType::Domain));
+    EXPECT_EQ(ModuleDisplayName(ModuleType::EventLogs), L"Event Logs");
 }
 
 TEST(ResolveModules, ExplainsCliOverrideOfConfig) {

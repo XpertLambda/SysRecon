@@ -142,3 +142,137 @@ TEST(AceFlags, InheritOnlyAcesDoNotApplyToTheObject) {
     EXPECT_FALSE(AceAppliesToObject(0x0B));  // OI | CI | IO
     EXPECT_TRUE(AceAppliesToObject(0x10));   // INHERITED_ACE alone still applies
 }
+
+// --- Event log XML ------------------------------------------------------------
+
+namespace {
+// Shape of a real event 4732 rendered with EvtRenderEventXml.
+const wchar_t* kEvent4732 =
+    L"<Event xmlns='http://schemas.microsoft.com/win/2004/08/events/event'><System>"
+    L"<Provider Name='Microsoft-Windows-Security-Auditing' Guid='{54849625}'/>"
+    L"<EventID>4732</EventID><TimeCreated SystemTime='2026-11-01T10:15:30.1234567Z'/>"
+    L"<Computer>HOST</Computer></System><EventData>"
+    L"<Data Name='MemberName'>-</Data><Data Name='MemberSid'>S-1-5-21-1-2-3-1001</Data>"
+    L"<Data Name='TargetUserName'>Administrators</Data>"
+    L"<Data Name='TargetSid'>S-1-5-32-544</Data>"
+    L"<Data Name='SubjectUserName'>a&amp;b &lt;x&gt;</Data>"
+    L"<Data Name='Empty'/>"
+    L"</EventData></Event>";
+}  // namespace
+
+TEST(EventXml, ReadsElementsDataAndAttributes) {
+    EXPECT_EQ(XmlElementText(kEvent4732, L"EventID"), L"4732");
+    EXPECT_EQ(XmlElementText(kEvent4732, L"Computer"), L"HOST");
+    EXPECT_EQ(EventDataValue(kEvent4732, L"TargetSid"), L"S-1-5-32-544");
+    EXPECT_EQ(EventDataValue(kEvent4732, L"MemberSid"), L"S-1-5-21-1-2-3-1001");
+    EXPECT_EQ(EventDataValue(kEvent4732, L"SubjectUserName"), L"a&b <x>");
+    EXPECT_EQ(XmlAttribute(kEvent4732, L"TimeCreated", L"SystemTime"), L"2026-11-01T10:15:30.1234567Z");
+    EXPECT_EQ(XmlAttribute(kEvent4732, L"Provider", L"Name"), L"Microsoft-Windows-Security-Auditing");
+}
+
+TEST(EventXml, MissingOrMalformedYieldsEmpty) {
+    EXPECT_EQ(EventDataValue(kEvent4732, L"Empty"), L"");
+    EXPECT_EQ(EventDataValue(kEvent4732, L"Nope"), L"");
+    EXPECT_EQ(XmlElementText(L"<A>unterminated", L"A"), L"");
+    EXPECT_EQ(XmlElementText(L"<A/>", L"A"), L"");
+    EXPECT_EQ(XmlAttribute(L"<T a='1'>", L"T", L"b"), L"");
+    EXPECT_EQ(XmlAttribute(L"<T xa='1' a=\"2\">", L"T", L"a"), L"2");
+    // A longer element name never matches a prefix of it.
+    EXPECT_EQ(XmlElementText(L"<UserNameX>no</UserNameX><UserName>yes</UserName>", L"UserName"), L"yes");
+    // Data Name markers outside a <Data> tag are ignored.
+    EXPECT_EQ(EventDataValue(L"<X Name='k'>bad</X><Data Name=\"k\">good</Data>", L"k"), L"good");
+}
+
+TEST(EventXml, DecodesEntities) {
+    EXPECT_EQ(XmlDecode(L"&lt;&gt;&amp;&quot;&apos;"), L"<>&\"'");
+    EXPECT_EQ(XmlDecode(L"&#65;&#x42;"), L"AB");
+    EXPECT_EQ(XmlDecode(L"&unknown; & &#; &#xZZ;"), L"&unknown; & &#; &#xZZ;");
+    EXPECT_EQ(XmlDecode(L"&#0;"), L"&#0;");
+}
+
+TEST(EventXml, ServiceInstallSeverity) {
+    EXPECT_EQ(ServiceInstallSeverity(L"%SystemRoot%\\System32\\svchost.exe -k netsvcs"), 0);
+    EXPECT_EQ(ServiceInstallSeverity(L"\"C:\\Program Files\\Vendor\\agent.exe\""), 0);
+    EXPECT_EQ(ServiceInstallSeverity(
+        L"\"C:\\ProgramData\\Microsoft\\Windows Defender\\Platform\\4.18.1\\MsMpEng.exe\""), 0);
+    EXPECT_EQ(ServiceInstallSeverity(L"C:\\Users\\bob\\AppData\\Roaming\\x\\svc.exe"), 2);
+    EXPECT_EQ(ServiceInstallSeverity(L"C:\\Windows\\Temp\\psexesvc.exe"), 2);
+    EXPECT_EQ(ServiceInstallSeverity(L"\\\\10.0.0.5\\share\\svc.exe"), 2);
+    // Metasploit/Impacket-style service: %COMSPEC% /b /c start ...
+    EXPECT_EQ(ServiceInstallSeverity(L"%COMSPEC% /b /c start /b /min powershell.exe -nop"), 3);
+    EXPECT_EQ(ServiceInstallSeverity(L"%COMSPEC% /c echo x > \\\\.\\pipe\\y"), 3);
+    EXPECT_EQ(ServiceInstallSeverity(L"cmd.exe /c whoami"), 3);
+    EXPECT_EQ(ServiceInstallSeverity(L"C:\\Windows\\System32\\cmd.exe /c x"), 3);
+    EXPECT_EQ(ServiceInstallSeverity(
+        L"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -nop -w hidden"), 3);
+    EXPECT_EQ(ServiceInstallSeverity(L"C:\\x\\loader.exe -enc SQBFAFgA"), 3);
+    EXPECT_EQ(ServiceInstallSeverity(L"rundll32.exe C:\\x.dll,Entry"), 3);
+}
+
+TEST(EventXml, PrivilegedGroupSids) {
+    EXPECT_TRUE(IsPrivilegedGroupSid(L"S-1-5-32-544"));
+    EXPECT_TRUE(IsPrivilegedGroupSid(L"s-1-5-32-555"));
+    EXPECT_TRUE(IsPrivilegedGroupSid(L"S-1-5-21-1004336348-1177238915-682003330-512"));
+    EXPECT_TRUE(IsPrivilegedGroupSid(L"S-1-5-21-1-2-3-519"));
+    EXPECT_FALSE(IsPrivilegedGroupSid(L"S-1-5-32-545"));            // Users
+    EXPECT_FALSE(IsPrivilegedGroupSid(L"S-1-5-21-1-2-3-513"));      // Domain Users
+    EXPECT_FALSE(IsPrivilegedGroupSid(L"S-1-5-21-1-2-3-5120"));
+    EXPECT_FALSE(IsPrivilegedGroupSid(L""));
+}
+
+TEST(EventXml, RecommendedLogSizes) {
+    EXPECT_EQ(RecommendedLogSizeKb(L"Security"), 196608u);
+    EXPECT_EQ(RecommendedLogSizeKb(L"system"), 32768u);
+    EXPECT_EQ(RecommendedLogSizeKb(L"Application"), 32768u);
+    EXPECT_EQ(RecommendedLogSizeKb(L"Microsoft-Windows-PowerShell/Operational"), 0u);
+}
+
+// --- Firewall rules -------------------------------------------------------------
+
+TEST(FirewallRules, PortLists) {
+    EXPECT_TRUE(PortListIncludes(L"*", 3389));
+    EXPECT_TRUE(PortListIncludes(L"80, 443,3389", 3389));
+    EXPECT_TRUE(PortListIncludes(L"5000-6000", 5985));
+    EXPECT_FALSE(PortListIncludes(L"5000-5900", 5985));
+    EXPECT_FALSE(PortListIncludes(L"RPC", 135));
+    EXPECT_FALSE(PortListIncludes(L"RPC-EPMap,Ply2Disc", 135));
+    EXPECT_FALSE(PortListIncludes(L"", 22));
+    EXPECT_FALSE(PortListIncludes(L"99999", 22));
+}
+
+TEST(FirewallRules, Severity) {
+    FirewallRuleView open;
+    open.enabled = open.inbound = open.allow = true;
+    open.remote_addresses = L"*";
+    open.local_ports = L"*";
+    EXPECT_EQ(FirewallRuleSeverity(open), 3);
+
+    FirewallRuleView app = open;
+    app.application = L"C:\\Program Files\\App\\app.exe";
+    app.public_profile = true;
+    EXPECT_EQ(FirewallRuleSeverity(app), 0);  // Program-scoped any-port rule.
+
+    FirewallRuleView rdp = open;
+    rdp.local_ports = L"3389";
+    rdp.protocol = 6;
+    rdp.service = L"TermService";
+    EXPECT_EQ(FirewallRuleSeverity(rdp), 0);  // Not on the Public profile.
+    rdp.public_profile = true;
+    EXPECT_EQ(FirewallRuleSeverity(rdp), 2);
+    rdp.remote_addresses = L"LocalSubnet";
+    EXPECT_EQ(FirewallRuleSeverity(rdp), 0);
+
+    FirewallRuleView icmp = open;
+    icmp.protocol = 1;
+    EXPECT_EQ(FirewallRuleSeverity(icmp), 0);
+
+    FirewallRuleView disabled = open;
+    disabled.enabled = false;
+    EXPECT_EQ(FirewallRuleSeverity(disabled), 0);
+    FirewallRuleView block = open;
+    block.allow = false;
+    EXPECT_EQ(FirewallRuleSeverity(block), 0);
+    FirewallRuleView outbound = open;
+    outbound.inbound = false;
+    EXPECT_EQ(FirewallRuleSeverity(outbound), 0);
+}

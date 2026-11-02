@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(SysRecon VERSION 1.7.1 LANGUAGES CXX)
+project(SysRecon VERSION 1.8.0 LANGUAGES CXX)
 
 # Set C++ standard
 set(CMAKE_CXX_STANDARD 20)
@@ -60,6 +60,7 @@ add_library(sysrecon_core STATIC
     src/core/logger.cpp
     src/core/config.cpp
     src/core/scan_plan.cpp
+    src/core/findings.cpp
 )
 target_include_directories(sysrecon_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -82,6 +83,7 @@ set(SOURCES
     modules/memory/memory_analyzer.cpp
     modules/privesc/privesc_analyzer.cpp
     modules/domain/domain_recon.cpp
+    modules/eventlogs/event_log_analyzer.cpp
     modules/reporting/report_generator.cpp
 )
 
@@ -93,6 +95,7 @@ set(HEADERS
     include/core/utils.h
     include/core/text_utils.h
     include/core/scan_plan.h
+    include/core/findings.h
     include/core/whitelist.h
     include/modules/accounts/user_enum.h
     include/modules/services/service_enum.h
@@ -102,6 +105,7 @@ set(HEADERS
     include/modules/memory/memory_analyzer.h
     include/modules/privesc/privesc_analyzer.h
     include/modules/domain/domain_recon.h
+    include/modules/eventlogs/event_log_analyzer.h
     include/modules/reporting/report_generator.h
 )
 
@@ -130,6 +134,7 @@ if(WIN32)
         ole32       # COM (Task Scheduler, WMI)
         oleaut32    # COM BSTR/VARIANT
         wbemuuid    # WMI (Win32_QuickFixEngineering)
+        wevtapi     # Event log queries (Event Logs module)
     )
     if(MINGW)
         # Wide-character entry point: the CRT calls wmain(argc, wchar_t**).
@@ -166,6 +171,7 @@ if(SYSRECON_BUILD_TESTS AND NOT CMAKE_CROSSCOMPILING)
         tests/test_scan_plan.cpp
         tests/test_config.cpp
         tests/test_utils_crypto.cpp
+        tests/test_findings.cpp
     )
     target_link_libraries(sysrecon_tests PRIVATE sysrecon_core GTest::gtest_main)
     # Lets tests validate the config.json that actually ships.

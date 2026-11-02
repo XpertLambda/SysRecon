@@ -25,6 +25,7 @@ const std::map<std::string, std::set<std::string>>& ModuleSchema() {
         {"registry",  {"enabled", "scan_startup_keys", "analyze_policies", "check_permissions", "custom_keys"}},
         {"memory",    {"enabled", "create_dumps", "scan_for_malware", "max_dump_size_mb"}},
         {"privesc",   {"enabled", "check_services", "check_registry", "check_filesystem", "check_credentials", "verify_signatures", "check_tokens", "check_scheduled_tasks", "check_patches", "check_defender", "check_hardening"}},
+        {"event_logs", {"enabled", "lookback_days", "failed_logon_threshold"}},
         {"domain",    {"enabled"}},
     };
     return schema;
@@ -212,6 +213,11 @@ bool ConfigManager::LoadFromFile(const String& filename) {
                 r.Bool(*pe, "modules.privesc", "check_defender", parsed.privesc.check_defender);
                 r.Bool(*pe, "modules.privesc", "check_hardening", parsed.privesc.check_hardening);
             }
+            if (const json* ev = section("event_logs")) {
+                r.Bool(*ev, "modules.event_logs", "enabled", parsed.event_logs.enabled);
+                r.SizeT(*ev, "modules.event_logs", "lookback_days", parsed.event_logs.lookback_days);
+                r.SizeT(*ev, "modules.event_logs", "failed_logon_threshold", parsed.event_logs.failed_logon_threshold);
+            }
             if (const json* dom = section("domain")) {
                 r.Bool(*dom, "modules.domain", "enabled", parsed.domain.enabled);
             }
@@ -302,6 +308,9 @@ bool ConfigManager::SaveToFile(const String& filename) const {
         j["modules"]["privesc"]["check_patches"] = config_.privesc.check_patches;
         j["modules"]["privesc"]["check_defender"] = config_.privesc.check_defender;
         j["modules"]["privesc"]["check_hardening"] = config_.privesc.check_hardening;
+        j["modules"]["event_logs"]["enabled"] = config_.event_logs.enabled;
+        j["modules"]["event_logs"]["lookback_days"] = config_.event_logs.lookback_days;
+        j["modules"]["event_logs"]["failed_logon_threshold"] = config_.event_logs.failed_logon_threshold;
         j["modules"]["domain"]["enabled"] = config_.domain.enabled;
 
         j["output"]["output_directory"] = Utils::WideToUtf8(config_.output.output_directory);
@@ -343,6 +352,7 @@ bool ConfigManager::IsModuleEnabled(ModuleType module) const {
         case ModuleType::Registry:  return config_.registry.enabled;
         case ModuleType::Memory:    return config_.memory.enabled;
         case ModuleType::PrivEsc:   return config_.privesc.enabled;
+        case ModuleType::EventLogs: return config_.event_logs.enabled;
         case ModuleType::Domain:    return config_.domain.enabled;
         default:                    return false;
     }
@@ -362,9 +372,17 @@ bool ConfigManager::ValidateConfig() const {
     const bool any_module_enabled = config_.accounts.enabled || config_.services.enabled ||
                                     config_.processes.enabled || config_.network.enabled ||
                                     config_.registry.enabled || config_.memory.enabled ||
-                                    config_.privesc.enabled;
+                                    config_.privesc.enabled || config_.event_logs.enabled ||
+                                    config_.domain.enabled;
     if (!any_module_enabled) {
         validation_errors_.push_back(L"At least one module must be enabled");
+    }
+
+    if (config_.event_logs.lookback_days == 0 || config_.event_logs.lookback_days > 365) {
+        validation_errors_.push_back(L"event_logs.lookback_days must be between 1 and 365");
+    }
+    if (config_.event_logs.failed_logon_threshold == 0) {
+        validation_errors_.push_back(L"event_logs.failed_logon_threshold must be at least 1");
     }
 
     const bool any_output_enabled = config_.output.generate_json || config_.output.generate_csv ||

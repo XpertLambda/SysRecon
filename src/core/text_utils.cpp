@@ -274,6 +274,265 @@ WString SanitizeFileName(const WString& name) {
     return out.empty() ? WString(L"unnamed") : out;
 }
 
+// --- Event log decisions ---------------------------------------------------
+
+namespace {
+
+bool IsXmlNameChar(wchar_t c) {
+    return (c >= L'a' && c <= L'z') || (c >= L'A' && c <= L'Z') || (c >= L'0' && c <= L'9') ||
+           c == L'_' || c == L'-' || c == L'.' || c == L':';
+}
+
+// Finds the next start tag "<name" whose local name is exactly `name`.
+// Returns the position just after the name, or npos.
+size_t FindStartTag(const WString& xml, const WString& name, size_t from) {
+    const WString open = L"<" + name;
+    for (size_t pos = xml.find(open, from); pos != WString::npos; pos = xml.find(open, pos + 1)) {
+        const size_t after = pos + open.size();
+        if (after >= xml.size() || !IsXmlNameChar(xml[after])) {
+            return after;
+        }
+    }
+    return WString::npos;
+}
+
+}  // namespace
+
+WString XmlDecode(const WString& text) {
+    WString out;
+    out.reserve(text.size());
+    for (size_t i = 0; i < text.size(); ++i) {
+        if (text[i] != L'&') {
+            out.push_back(text[i]);
+            continue;
+        }
+        const size_t semi = text.find(L';', i);
+        if (semi == WString::npos || semi - i > 10) {
+            out.push_back(text[i]);
+            continue;
+        }
+        const WString entity = text.substr(i + 1, semi - i - 1);
+        wchar_t decoded = 0;
+        if (entity == L"lt") decoded = L'<';
+        else if (entity == L"gt") decoded = L'>';
+        else if (entity == L"amp") decoded = L'&';
+        else if (entity == L"quot") decoded = L'"';
+        else if (entity == L"apos") decoded = L'\'';
+        else if (entity.size() > 1 && entity[0] == L'#') {
+            const bool hex = entity[1] == L'x' || entity[1] == L'X';
+            const WString digits = entity.substr(hex ? 2 : 1);
+            uint32_t value = 0;
+            bool ok = !digits.empty();
+            for (wchar_t c : digits) {
+                uint32_t d;
+                if (c >= L'0' && c <= L'9') d = c - L'0';
+                else if (hex && c >= L'a' && c <= L'f') d = c - L'a' + 10;
+                else if (hex && c >= L'A' && c <= L'F') d = c - L'A' + 10;
+                else { ok = false; break; }
+                value = value * (hex ? 16 : 10) + d;
+                if (value > 0xFFFF) { ok = false; break; }
+            }
+            if (ok && value != 0) decoded = static_cast<wchar_t>(value);
+        }
+        if (decoded == 0) {
+            out.push_back(text[i]);
+            continue;
+        }
+        out.push_back(decoded);
+        i = semi;
+    }
+    return out;
+}
+
+WString XmlElementText(const WString& xml, const WString& name) {
+    const size_t after = FindStartTag(xml, name, 0);
+    if (after == WString::npos) {
+        return WString();
+    }
+    const size_t gt = xml.find(L'>', after);
+    if (gt == WString::npos || (gt > 0 && xml[gt - 1] == L'/')) {
+        return WString();  // Unterminated, or self-closing <name/>.
+    }
+    const size_t close = xml.find(L"</" + name + L">", gt + 1);
+    if (close == WString::npos) {
+        return WString();
+    }
+    return XmlDecode(xml.substr(gt + 1, close - gt - 1));
+}
+
+WString EventDataValue(const WString& xml, const WString& name) {
+    for (const wchar_t quote : {L'\'', L'"'}) {
+        const WString marker = WString(L"Name=") + quote + name + quote;
+        size_t pos = 0;
+        while ((pos = xml.find(marker, pos)) != WString::npos) {
+            // The marker must sit inside a <Data ...> start tag.
+            const size_t lt = xml.rfind(L'<', pos);
+            const size_t gt = xml.find(L'>', pos);
+            if (lt != WString::npos && gt != WString::npos &&
+                xml.compare(lt, 5, L"<Data") == 0 && xml.find(L'>', lt) == gt) {
+                if (xml[gt - 1] == L'/') {
+                    return WString();
+                }
+                const size_t close = xml.find(L"</Data>", gt + 1);
+                if (close == WString::npos) {
+                    return WString();
+                }
+                return XmlDecode(xml.substr(gt + 1, close - gt - 1));
+            }
+            pos += marker.size();
+        }
+    }
+    return WString();
+}
+
+WString XmlAttribute(const WString& xml, const WString& element, const WString& attr) {
+    const size_t after = FindStartTag(xml, element, 0);
+    if (after == WString::npos) {
+        return WString();
+    }
+    const size_t gt = xml.find(L'>', after);
+    const WString tag = xml.substr(after, gt == WString::npos ? WString::npos : gt - after);
+    for (size_t pos = tag.find(attr); pos != WString::npos; pos = tag.find(attr, pos + 1)) {
+        // Whole attribute name: preceded by whitespace, followed by '='.
+        if (pos == 0 || !iswspace(tag[pos - 1])) continue;
+        size_t eq = pos + attr.size();
+        while (eq < tag.size() && iswspace(tag[eq])) ++eq;
+        if (eq >= tag.size() || tag[eq] != L'=') continue;
+        size_t q = eq + 1;
+        while (q < tag.size() && iswspace(tag[q])) ++q;
+        if (q >= tag.size() || (tag[q] != L'\'' && tag[q] != L'"')) continue;
+        const size_t end = tag.find(tag[q], q + 1);
+        if (end == WString::npos) return WString();
+        return XmlDecode(tag.substr(q + 1, end - q - 1));
+    }
+    return WString();
+}
+
+int ServiceInstallSeverity(const WString& image_path) {
+    WString p = ToLowerAscii(image_path);
+    std::replace(p.begin(), p.end(), L'/', L'\\');
+
+    static const wchar_t* hosts[] = {
+        L"%comspec%", L"cmd.exe", L"cmd ", L"powershell", L"pwsh", L"mshta", L"rundll32",
+        L"regsvr32", L"wscript", L"cscript",
+    };
+    const WString exe = ToLowerAscii(GetFileNameComponent(ExtractExecutablePath(image_path)));
+    for (const auto* h : hosts) {
+        const WString host(h);
+        if (exe == host || exe + L" " == host || exe == host + L".exe" ||
+            p.rfind(host, 0) == 0 || p.find(L"\\" + host) != WString::npos) {
+            return 3;
+        }
+    }
+    if (p.find(L" -enc") != WString::npos || p.find(L" -encodedcommand") != WString::npos ||
+        p.find(L"frombase64string") != WString::npos) {
+        return 3;
+    }
+
+    if (p.rfind(L"\\\\", 0) == 0 || p.rfind(L"\"\\\\", 0) == 0) {
+        return 2;  // Binary on a network share.
+    }
+    // Defender's platform binaries live under ProgramData by design.
+    if (p.find(L"\\programdata\\microsoft\\windows defender\\") != WString::npos) {
+        return 0;
+    }
+    if (IsUserWritableExecutionPath(p) ||
+        (p.find(L"\\users\\") != WString::npos && p.find(L"\\appdata\\") != WString::npos)) {
+        return 2;
+    }
+    return 0;
+}
+
+bool IsPrivilegedGroupSid(const WString& sid) {
+    const WString s = ToLowerAscii(sid);
+    if (s == L"s-1-5-32-544" || s == L"s-1-5-32-551" || s == L"s-1-5-32-555") {
+        return true;
+    }
+    if (s.rfind(L"s-1-5-21-", 0) != 0) {
+        return false;
+    }
+    const size_t dash = s.find_last_of(L'-');
+    const WString rid = s.substr(dash + 1);
+    return rid == L"512" || rid == L"518" || rid == L"519";
+}
+
+uint64_t RecommendedLogSizeKb(const WString& channel) {
+    const WString c = ToLowerAscii(channel);
+    if (c == L"security") return 196608;
+    if (c == L"application" || c == L"system") return 32768;
+    return 0;
+}
+
+// --- Firewall rule decisions -----------------------------------------------
+
+bool PortListIncludes(const WString& ports, int port) {
+    const WString list = ToLowerAscii(ports);
+    size_t start = 0;
+    while (start <= list.size()) {
+        size_t comma = list.find(L',', start);
+        if (comma == WString::npos) comma = list.size();
+        WString token = list.substr(start, comma - start);
+        token.erase(std::remove_if(token.begin(), token.end(), [](wchar_t c) { return iswspace(c); }),
+                    token.end());
+        start = comma + 1;
+        if (token == L"*") {
+            return true;
+        }
+        auto parse = [](const WString& t, int& out) {
+            if (t.empty() || t.size() > 5) return false;
+            int v = 0;
+            for (wchar_t c : t) {
+                if (c < L'0' || c > L'9') return false;
+                v = v * 10 + (c - L'0');
+            }
+            out = v;
+            return v <= 65535;
+        };
+        const size_t dash = token.find(L'-');
+        int lo = 0, hi = 0;
+        if (dash == WString::npos) {
+            if (parse(token, lo) && lo == port) return true;
+        } else if (parse(token.substr(0, dash), lo) && parse(token.substr(dash + 1), hi)) {
+            if (lo <= port && port <= hi) return true;
+        }
+        if (comma == list.size()) break;
+    }
+    return false;
+}
+
+int FirewallRuleSeverity(const FirewallRuleView& rule) {
+    if (!rule.enabled || !rule.inbound || !rule.allow) {
+        return 0;
+    }
+    auto is_any = [](const WString& v) {
+        WString t = ToLowerAscii(v);
+        t.erase(std::remove_if(t.begin(), t.end(), [](wchar_t c) { return iswspace(c); }), t.end());
+        return t.empty() || t == L"*" || t == L"any";
+    };
+    if (!is_any(rule.remote_addresses)) {
+        return 0;
+    }
+    // ICMP and other port-less protocols: LocalPorts is meaningless there.
+    const bool has_ports = rule.protocol == 6 || rule.protocol == 17 || rule.protocol == 256;
+    if (!has_ports) {
+        return 0;
+    }
+    if (is_any(rule.local_ports) && rule.application.empty() && is_any(rule.service)) {
+        return 3;
+    }
+    // An any-port rule scoped to one program only admits that program's
+    // listeners, so only explicit port lists count here.
+    if (rule.public_profile && rule.protocol != 17 && !is_any(rule.local_ports)) {
+        static const int admin_ports[] = {22, 23, 135, 139, 445, 3389, 5985, 5986};
+        for (int p : admin_ports) {
+            if (PortListIncludes(rule.local_ports, p)) {
+                return 2;
+            }
+        }
+    }
+    return 0;
+}
+
 }
 }
 }

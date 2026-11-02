@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../../sysrecon.h"
+#include "../../core/findings.h"
 
 namespace SysRecon {
 namespace Modules {
@@ -57,6 +58,16 @@ public:
     // Checks that failed or could not run. Rendered in every report format so
     // a partial scan is never mistaken for a clean one.
     void SetIncompleteChecks(const StringVector& notes) { incomplete_checks_ = notes; }
+    // --baseline comparison: rendered as a "baseline" section (JSON) or a
+    // summary box (HTML) listing resolved findings.
+    void SetBaseline(const String& source, const String& baseline_timestamp,
+                     const Core::Findings::BaselineDiff& diff, bool new_only) {
+        has_baseline_ = true;
+        baseline_source_ = source;
+        baseline_timestamp_ = baseline_timestamp;
+        baseline_diff_ = diff;
+        baseline_new_only_ = new_only;
+    }
     
     // Report generation
     bool GenerateReport(ReportFormat format, const String& filename);
@@ -82,6 +93,11 @@ private:
     SystemInfo system_info_;
     std::map<String, String> custom_sections_;
     StringVector incomplete_checks_;
+    bool has_baseline_ = false;
+    bool baseline_new_only_ = false;
+    String baseline_source_;
+    String baseline_timestamp_;
+    Core::Findings::BaselineDiff baseline_diff_;
 
     bool results_processed_;
 };

@@ -123,6 +123,20 @@ TEST_F(ConfigTest, MissingFileReportsErrorAndKeepsDefaults) {
     EXPECT_FALSE(Cfg().memory.enabled);
 }
 
+TEST_F(ConfigTest, EventLogSettings) {
+    ASSERT_TRUE(Load(R"({"modules": {"event_logs": {"enabled": false, "lookback_days": 30,
+                                                    "failed_logon_threshold": 5}}})"));
+    EXPECT_FALSE(Cfg().event_logs.enabled);
+    EXPECT_EQ(Cfg().event_logs.lookback_days, 30u);
+    EXPECT_EQ(Cfg().event_logs.failed_logon_threshold, 5u);
+    EXPECT_TRUE(ConfigManager::Instance().GetWarnings().empty());
+
+    EXPECT_FALSE(Load(R"({"modules": {"event_logs": {"lookback_days": 0}}})"));
+    EXPECT_FALSE(Load(R"({"modules": {"event_logs": {"lookback_days": 366}}})"));
+    EXPECT_FALSE(Load(R"({"modules": {"event_logs": {"failed_logon_threshold": 0}}})"));
+    EXPECT_FALSE(Load(R"({"modules": {"event_logs": {"lookback_days": "7"}}})"));
+}
+
 TEST_F(ConfigTest, AcceptsCommentsAndUtf8Paths) {
     ASSERT_TRUE(Load("{\n  // operator note\n  \"output\": {\"output_directory\": \"C:/Berichte/M\xC3\xBCller\"}\n}"));
     EXPECT_EQ(Cfg().output.output_directory, L"C:/Berichte/M\u00FCller");
@@ -137,4 +151,6 @@ TEST_F(ConfigTest, ShippedConfigFileIsValid) {
     ASSERT_TRUE(Load(text));
     EXPECT_TRUE(ConfigManager::Instance().GetWarnings().empty());
     EXPECT_FALSE(Cfg().memory.enabled);
+    EXPECT_TRUE(Cfg().event_logs.enabled);
+    EXPECT_EQ(Cfg().event_logs.lookback_days, 7u);
 }

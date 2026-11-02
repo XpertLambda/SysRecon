@@ -17,6 +17,13 @@ void ScanEngine::Reset() {
     output_directory_.clear();
     stealth_mode_ = false;
     min_severity_ = SecurityLevel::Low;
+    only_patterns_.clear();
+    skip_patterns_.clear();
+    baseline_ = Findings::Baseline{};
+    baseline_diff_ = Findings::BaselineDiff{};
+    has_baseline_ = false;
+    new_only_ = false;
+    filtered_count_ = 0;
     selection_ = ModuleSelection::FromConfig(ScanConfig{});
     progress_.store(0.0f);
     current_module_.clear();
@@ -100,6 +107,10 @@ void ScanEngine::ApplyConfigToModules() {
     }
     if (user_enum_) {
         user_enum_->SetEnumerateGroups(cfg.accounts.enumerate_groups);
+    }
+    if (event_log_analyzer_) {
+        event_log_analyzer_->SetLookbackDays(cfg.event_logs.lookback_days);
+        event_log_analyzer_->SetFailedLogonThreshold(cfg.event_logs.failed_logon_threshold);
     }
     if (privesc_analyzer_) {
         privesc_analyzer_->SetCheckServices(cfg.privesc.check_services);
@@ -205,6 +216,7 @@ bool ScanEngine::RunFullScan() {
             { ModuleType::Registry,  L"Registry",      registry_analyzer_ != nullptr },
             { ModuleType::Memory,    L"Memory",        memory_analyzer_ != nullptr },
             { ModuleType::PrivEsc,   L"Privilege Escalation", privesc_analyzer_ != nullptr },
+            { ModuleType::EventLogs, L"Event Logs",    event_log_analyzer_ != nullptr },
             { ModuleType::Domain,    L"Domain",        domain_recon_ != nullptr },
         };
 
@@ -362,6 +374,7 @@ bool ScanEngine::RunModuleScan(ModuleType module) {
                     {L"interfaces",             [&] { return network_enum_->EnumerateInterfaces(); }},
                     {L"shares",                 [&] { return network_enum_->EnumerateShares(); }},
                     {L"firewall",               [&] { return network_enum_->AnalyzeFirewall(); }},
+                    {L"firewall rules",         [&] { return network_enum_->AnalyzeFirewallRules(); }},
                 });
             }
             break;
@@ -396,6 +409,19 @@ bool ScanEngine::RunModuleScan(ModuleType module) {
             }
             break;
 
+        case ModuleType::EventLogs:
+            if (event_log_analyzer_) {
+                return run_all(L"Event Logs", {
+                    {L"log configuration",  [&] { return event_log_analyzer_->CheckLogConfiguration(); }},
+                    {L"log clearing",       [&] { return event_log_analyzer_->CheckLogClearing(); }},
+                    {L"service installs",   [&] { return event_log_analyzer_->CheckServiceInstalls(); }},
+                    {L"account changes",    [&] { return event_log_analyzer_->CheckAccountChanges(); }},
+                    {L"failed logons",      [&] { return event_log_analyzer_->CheckFailedLogons(); }},
+                    {L"Defender events",    [&] { return event_log_analyzer_->CheckDefenderEvents(); }},
+                });
+            }
+            break;
+
         case ModuleType::Domain:
             if (domain_recon_) {
                 return run_all(L"Domain", {
@@ -420,6 +446,7 @@ void ScanEngine::DestroyModules() {
     memory_analyzer_.reset();
     privesc_analyzer_.reset();
     domain_recon_.reset();
+    event_log_analyzer_.reset();
     report_generator_.reset();
 }
 
@@ -448,6 +475,7 @@ void ScanEngine::CollectResults() {
     if (registry_analyzer_) collect(registry_analyzer_->GetScanResults(), L"registry");
     if (memory_analyzer_)   collect(memory_analyzer_->GetScanResults(), L"memory");
     if (privesc_analyzer_)  collect(privesc_analyzer_->GetScanResults(), L"privilege-escalation");
+    if (event_log_analyzer_) collect(event_log_analyzer_->GetScanResults(), L"event-log");
     if (domain_recon_)      collect(domain_recon_->GetScanResults(), L"domain");
 
     // Drop anything below the configured minimum severity (CLI --min-severity).
@@ -460,6 +488,27 @@ void ScanEngine::CollectResults() {
         if (before != scan_results_.size()) {
             SYSRECON_LOG_INFO(L"Filtered out " + std::to_wstring(before - scan_results_.size()) +
                               L" finding(s) below the minimum severity");
+        }
+    }
+
+    // --only / --skip.
+    filtered_count_ = Findings::ApplyFilters(scan_results_, only_patterns_, skip_patterns_);
+    if (filtered_count_ > 0) {
+        SYSRECON_LOG_INFO(L"Filtered out " + std::to_wstring(filtered_count_) +
+                          L" finding(s) with --only / --skip");
+    }
+
+    // --baseline: mark each finding new or unchanged; --new-only keeps the new.
+    if (has_baseline_) {
+        baseline_diff_ = Findings::Compare(scan_results_, baseline_);
+        for (size_t i = 0; i < scan_results_.size(); ++i) {
+            scan_results_[i].details[Findings::kBaselineDetailKey] =
+                baseline_diff_.is_new[i] ? L"new" : L"unchanged";
+        }
+        if (new_only_) {
+            scan_results_.erase(std::remove_if(scan_results_.begin(), scan_results_.end(),
+                [](const ScanResult& r) { return r.details.at(Findings::kBaselineDetailKey) != L"new"; }),
+                scan_results_.end());
         }
     }
 
@@ -504,6 +553,9 @@ bool ScanEngine::ExportResults(const String& format, const String& filename) {
             notes.insert(notes.begin(), L"Scan ran without Administrator privileges; many checks see only part of the system");
         }
         report_generator_->SetIncompleteChecks(notes);
+    }
+    if (has_baseline_) {
+        report_generator_->SetBaseline(baseline_.source, baseline_.scan_timestamp, baseline_diff_, new_only_);
     }
 
     if (format == L"json") {
@@ -561,6 +613,7 @@ bool ScanEngine::InitializeModules() {
     if (selection_.registry)  { registry_analyzer_ = std::make_unique<Modules::RegistryAnalyzer>(); init(registry_analyzer_, L"Registry"); }
     if (selection_.memory)    { memory_analyzer_ = std::make_unique<Modules::MemoryAnalyzer>();    init(memory_analyzer_, L"Memory"); }
     if (selection_.privesc)   { privesc_analyzer_ = std::make_unique<Modules::PrivEscAnalyzer>(); init(privesc_analyzer_, L"Privilege Escalation"); }
+    if (selection_.eventlogs) { event_log_analyzer_ = std::make_unique<Modules::EventLogAnalyzer>(); init(event_log_analyzer_, L"Event Logs"); }
     if (selection_.domain)    { domain_recon_ = std::make_unique<Modules::DomainReconAnalyzer>(); init(domain_recon_, L"Domain"); }
 
     report_generator_ = std::make_unique<Modules::ReportGenerator>();

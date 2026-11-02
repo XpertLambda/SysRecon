@@ -68,6 +68,9 @@ public:
     bool EnumerateInterfaces();
     bool EnumerateShares();
     bool AnalyzeFirewall();
+    // Enabled inbound allow rules open to any remote address (Windows
+    // Firewall COM API). Scored by Core::Text::FirewallRuleSeverity.
+    bool AnalyzeFirewallRules();
     void Cleanup();
     
     // Results access

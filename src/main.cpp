@@ -6,6 +6,8 @@
 #include <windows.h>
 #include <cstdio>
 #include <clocale>
+#include <fstream>
+#include <filesystem>
 
 using namespace SysRecon;
 using namespace SysRecon::Core;
@@ -36,12 +38,17 @@ struct CommandLineOptions {
     bool registry_only = false;
     bool memory_only = false;
     bool privesc_only = false;
+    bool eventlogs_only = false;
     bool domain_only = false;
     bool selective_scan = false;
 
     // Tier-4 workflow options.
     SysRecon::String min_severity;   // empty = include all (low+)
     bool exit_code = false;          // process exit code reflects max finding severity
+    StringVector only_patterns;      // --only: keep findings matching any pattern
+    StringVector skip_patterns;      // --skip: drop findings matching any pattern
+    String baseline_file;            // --baseline: previous JSON report to compare with
+    bool new_only = false;           // --new-only: report only findings not in the baseline
 };
 
 void PrintBanner() {
@@ -90,6 +97,19 @@ void PrintHelp() {
     std::wcout << L"                          report-generation failure=2)\n";
     std::wcout << L"\n";
 
+    std::wcout << L"FINDING FILTERS AND BASELINE:\n";
+    std::wcout << L"  Every finding has an ID <module>/<item>, e.g.\n";
+    std::wcout << L"  privilege-escalation/writable-directory-on-path-c-tools (\"id\" in JSON).\n";
+    std::wcout << L"  --only PATTERN          Report only findings matching PATTERN (repeatable,\n";
+    std::wcout << L"                          or comma-separated). '*' and '?' are wildcards; a\n";
+    std::wcout << L"                          pattern without '/' matches the module: --only network\n";
+    std::wcout << L"  --skip PATTERN          Drop findings matching PATTERN (applied after --only)\n";
+    std::wcout << L"  --baseline FILE         Compare with an earlier JSON report: findings are\n";
+    std::wcout << L"                          marked new or unchanged, and fixed ones are listed\n";
+    std::wcout << L"  --new-only              With --baseline, report only new findings (with\n";
+    std::wcout << L"                          --exit-code, fail CI only on regressions)\n";
+    std::wcout << L"\n";
+
     std::wcout << L"MODULE SELECTION (replaces the config's module selection):\n";
     std::wcout << L"  --accounts              User accounts, groups and password policy\n";
     std::wcout << L"  --services              Windows services\n";
@@ -98,6 +118,8 @@ void PrintHelp() {
     std::wcout << L"  --registry              Persistence keys, security policy, key ACLs\n";
     std::wcout << L"  --memory                Process memory analysis (slow; EDR-visible)\n";
     std::wcout << L"  --privesc               Local privilege-escalation assessment\n";
+    std::wcout << L"  --eventlogs             Event logs: cleared logs, new services/accounts,\n";
+    std::wcout << L"                          failed logons, Defender detections, log sizes\n";
     std::wcout << L"  --domain                Light AD domain recon (domain-joined hosts; opt-in)\n";
     std::wcout << L"  --all                   All modules, including Memory\n";
     std::wcout << L"  Without a module flag, the modules enabled in config.json run\n";
@@ -117,6 +139,9 @@ void PrintHelp() {
     std::wcout << L"  sysrecon.exe --all                    # Everything, including memory\n";
     std::wcout << L"  sysrecon.exe -f json -o .\\output      # JSON report to .\\output\n";
     std::wcout << L"  sysrecon.exe --stealth --quiet        # Low-footprint silent scan\n";
+    std::wcout << L"  sysrecon.exe --skip \"user-accounts\"  # Everything except account findings\n";
+    std::wcout << L"  sysrecon.exe -f json --baseline old.json --new-only --exit-code\n";
+    std::wcout << L"                                        # Fail only on findings new since old.json\n";
     std::wcout << L"\n";
 }
 
@@ -134,12 +159,11 @@ void PrintVersion() {
 #endif
     std::wcout << L"\n";
     std::wcout << L"New in v" << SYSRECON_VERSION << L":\n";
-    std::wcout << L"  * Fixed: crash on every run with arguments, and lost redirected output,\n";
-    std::wcout << L"    on real Windows\n";
-    std::wcout << L"  * --memory and other module flags override config.json; --all added\n";
-    std::wcout << L"  * config.json found next to sysrecon.exe; every option now honoured\n";
-    std::wcout << L"  * Password/lockout policy, RID-based account and firewall-profile checks\n";
-    std::wcout << L"  * Reports record incomplete checks and are access-restricted\n";
+    std::wcout << L"  * Event Logs module: cleared logs, new services and accounts, privileged\n";
+    std::wcout << L"    group changes, failed logons, Defender detections, log sizes\n";
+    std::wcout << L"  * Finding IDs, --only / --skip filters\n";
+    std::wcout << L"  * --baseline / --new-only: compare with an earlier report\n";
+    std::wcout << L"  * Network: firewall rules open to any address; listening port -> service\n";
     std::wcout << L"\n";
 }
 
@@ -293,8 +317,9 @@ void ShowModuleSelectionMenu(CommandLineOptions& options) {
     std::wcout << L"  5. Registry Persistence Keys\n";
     std::wcout << L"  6. Process Memory Analysis (Slow)\n";
     std::wcout << L"  7. Privilege Escalation Assessment\n";
-    std::wcout << L"  8. Select All Modules (including Memory)\n";
-    std::wcout << L"  9. Start Scan with Selected Modules\n";
+    std::wcout << L"  8. Event Logs\n";
+    std::wcout << L"  9. Select All Modules (including Memory)\n";
+    std::wcout << L" 10. Start Scan with Selected Modules\n";
     std::wcout << L"  0. Back to Main Menu\n";
     std::wcout << L"\n";
     std::wcout << L"══════════════════════════════════════════════════════════════════════\n";
@@ -303,7 +328,7 @@ void ShowModuleSelectionMenu(CommandLineOptions& options) {
     const bool any_selected = options.accounts_only || options.services_only ||
                               options.processes_only || options.network_only ||
                               options.registry_only || options.memory_only ||
-                              options.privesc_only;
+                              options.privesc_only || options.eventlogs_only;
     if (!options.selective_scan || !any_selected) {
         std::wcout << L"None";
     } else {
@@ -315,6 +340,7 @@ void ShowModuleSelectionMenu(CommandLineOptions& options) {
         if (options.registry_only) { std::wcout << (first ? L"" : L", ") << L"Registry"; first = false; }
         if (options.memory_only) { std::wcout << (first ? L"" : L", ") << L"Memory"; first = false; }
         if (options.privesc_only) { std::wcout << (first ? L"" : L", ") << L"PrivEsc"; first = false; }
+        if (options.eventlogs_only) { std::wcout << (first ? L"" : L", ") << L"Event Logs"; first = false; }
     }
     std::wcout << L"\n";
 }
@@ -479,6 +505,34 @@ bool ParseArguments(int argc, wchar_t* argv[], CommandLineOptions& options) {
             continue;
         }
 
+        if (arg == L"--only" || arg == L"--skip") {
+            if (i + 1 >= argc) {
+                std::wcerr << L"Error: " << arg << L" requires a pattern\n";
+                return false;
+            }
+            StringVector& target = (arg == L"--only") ? options.only_patterns : options.skip_patterns;
+            for (const auto& p : Core::Utils::Split(argv[++i], L",")) {
+                const String trimmed = Core::Utils::Trim(p);
+                if (!trimmed.empty()) target.push_back(trimmed);
+            }
+            continue;
+        }
+
+        if (arg == L"--baseline") {
+            if (i + 1 < argc) {
+                options.baseline_file = argv[++i];
+            } else {
+                std::wcerr << L"Error: --baseline requires a JSON report file\n";
+                return false;
+            }
+            continue;
+        }
+
+        if (arg == L"--new-only") {
+            options.new_only = true;
+            continue;
+        }
+
         // Module selection
         if (arg == L"--accounts") {
             options.accounts_only = true;
@@ -522,6 +576,12 @@ bool ParseArguments(int argc, wchar_t* argv[], CommandLineOptions& options) {
             continue;
         }
 
+        if (arg == L"--eventlogs") {
+            options.eventlogs_only = true;
+            options.selective_scan = true;
+            continue;
+        }
+
         if (arg == L"--domain") {
             options.domain_only = true;
             options.selective_scan = true;
@@ -531,7 +591,7 @@ bool ParseArguments(int argc, wchar_t* argv[], CommandLineOptions& options) {
         if (arg == L"--all") {
             options.accounts_only = options.services_only = options.processes_only = true;
             options.network_only = options.registry_only = options.memory_only = true;
-            options.privesc_only = true;
+            options.privesc_only = options.eventlogs_only = true;
             options.selective_scan = true;
             continue;
         }
@@ -570,6 +630,7 @@ CliModuleRequest BuildModuleRequest(const CommandLineOptions& options) {
     req.modules.registry = options.registry_only;
     req.modules.memory = options.memory_only;
     req.modules.privesc = options.privesc_only;
+    req.modules.eventlogs = options.eventlogs_only;
     req.modules.domain = options.domain_only;
     return req;
 }
@@ -649,6 +710,32 @@ int RunScan(CommandLineOptions& options) {
         }
     }
 
+    engine.SetFindingFilters(options.only_patterns, options.skip_patterns);
+    if (options.new_only && options.baseline_file.empty()) {
+        std::wcerr << L"[-] --new-only needs --baseline FILE\n";
+        return 1;
+    }
+    if (!options.baseline_file.empty()) {
+        std::ifstream in{std::filesystem::path(options.baseline_file), std::ios::binary};
+        if (!in.is_open()) {
+            std::wcerr << L"[-] Baseline report not found: " << options.baseline_file << L"\n";
+            return 1;
+        }
+        const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        Findings::Baseline baseline;
+        String parse_error;
+        // A UTF-8 BOM (PowerShell's Out-File) is not part of the JSON.
+        const std::string body = text.rfind("\xEF\xBB\xBF", 0) == 0 ? text.substr(3) : text;
+        if (!Findings::ParseBaseline(body, baseline, parse_error)) {
+            std::wcerr << L"[-] Invalid baseline report " << options.baseline_file << L": " << parse_error << L"\n";
+            return 1;
+        }
+        baseline.source = options.baseline_file;
+        engine.SetBaseline(baseline, options.new_only);
+        log.Info(L"Baseline: " + options.baseline_file + L" (" + std::to_wstring(baseline.entries.size()) +
+                 L" findings)");
+    }
+
     // 4. Construct and configure exactly the selected modules.
     if (!engine.Initialize()) {
         log.Error(L"Failed to initialize scan engine");
@@ -683,6 +770,16 @@ int RunScan(CommandLineOptions& options) {
         }
         if (options.quick) {
             std::wcout << L"  [QUICK] Quick scan: essential checks only\n";
+        }
+        if (!options.only_patterns.empty()) {
+            std::wcout << L"  Only:     " << Core::Utils::Join(options.only_patterns, L", ") << L"\n";
+        }
+        if (!options.skip_patterns.empty()) {
+            std::wcout << L"  Skip:     " << Core::Utils::Join(options.skip_patterns, L", ") << L"\n";
+        }
+        if (!options.baseline_file.empty()) {
+            std::wcout << L"  Baseline: " << options.baseline_file
+                       << (options.new_only ? L" (new findings only)" : L"") << L"\n";
         }
         for (const auto& note : plan_notes) {
             std::wcout << L"  [i] " << note << L"\n";
@@ -764,6 +861,12 @@ int RunScan(CommandLineOptions& options) {
                    << counts[3] << L" critical, " << counts[2] << L" high, "
                    << counts[1] << L" medium, " << counts[0] << L" low\n";
 
+        if (engine.HasBaseline() && reports_generated > 0) {
+            const auto& diff = engine.GetBaselineDiff();
+            std::wcout << L"[BASELINE] " << diff.new_count << L" new, " << diff.unchanged_count
+                       << L" unchanged, " << diff.resolved.size() << L" resolved since "
+                       << options.baseline_file << L"\n";
+        }
         if (reports_generated > 0) {
             std::wcout << L"[+] Successfully generated " << reports_generated << L" report(s)\n";
         }
@@ -813,7 +916,7 @@ int InteractiveMode() {
                     full.quick = false;
                     full.accounts_only = full.services_only = full.processes_only = false;
                     full.network_only = full.registry_only = full.memory_only = false;
-                    full.privesc_only = false;
+                    full.privesc_only = full.eventlogs_only = full.domain_only = false;
                     int result = RunScan(full);
                     if (result == 0) {
                         std::wcout << L"\n[+] Scan completed successfully!\n";
@@ -828,7 +931,7 @@ int InteractiveMode() {
                 bool selecting = true;
                 while (selecting) {
                     ShowModuleSelectionMenu(options);
-                    int modChoice = GetMenuChoice(0, 9);
+                    int modChoice = GetMenuChoice(0, 10);
                     
                     switch (modChoice) {
                         case 1:
@@ -860,6 +963,11 @@ int InteractiveMode() {
                             options.selective_scan = true;
                             break;
                         case 8:
+                            options.eventlogs_only = !options.eventlogs_only;
+                            options.selective_scan = true;
+                            break;
+                        case 9:
+                            options.eventlogs_only = true;
                             options.accounts_only = true;
                             options.services_only = true;
                             options.processes_only = true;
@@ -869,7 +977,7 @@ int InteractiveMode() {
                             options.privesc_only = true;
                             options.selective_scan = true;
                             break;
-                        case 9: {
+                        case 10: {
                             // Check that a module is actually selected, not
                             // merely that the selection menu was visited:
                             // selective_scan is sticky, so toggling every
@@ -879,7 +987,7 @@ int InteractiveMode() {
                                 options.accounts_only || options.services_only ||
                                 options.processes_only || options.network_only ||
                                 options.registry_only || options.memory_only ||
-                                options.privesc_only;
+                                options.privesc_only || options.eventlogs_only;
 
                             if (!any_selected) {
                                 std::wcout << L"\n[!] Please select at least one module!\n";

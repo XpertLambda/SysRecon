@@ -17,7 +17,7 @@
     Used by the `windows-test` CI job. Also runnable by hand in a disposable
     Windows VM (it installs and then uninstalls SysRecon):
 
-        pwsh -File tests\windows\smoke-test.ps1 -Installer .\SysRecon-Setup-1.7.1.exe
+        pwsh -File tests\windows\smoke-test.ps1 -Installer .\SysRecon-Setup-1.8.0.exe
 
 .PARAMETER Installer
     Path to SysRecon-Setup-<version>.exe.
@@ -165,7 +165,8 @@ if ($json) {
     # hardcoded so adding a default-on module does not break this check.
     $order = [ordered]@{
         accounts = 'Accounts'; services = 'Services'; processes = 'Processes'; network = 'Network'
-        registry = 'Registry'; memory = 'Memory'; privesc = 'Privilege Escalation'; domain = 'Domain'
+        registry = 'Registry'; memory = 'Memory'; privesc = 'Privilege Escalation'
+        event_logs = 'Event Logs'; domain = 'Domain'
     }
     $installedCfg = Get-Content -Raw -LiteralPath (Join-Path $InstallDir 'config.json') | ConvertFrom-Json
     $expected = @($order.Keys | Where-Object {
@@ -233,6 +234,62 @@ Assert-ScanComplete $r 'stealth scan'
 if ($r) { Assert-True ($r.scan_info.stealth_mode -eq $true) 'stealth recorded in report' }
 $out = Get-Output 'scan-stealth'
 Assert-True ($null -eq $out -or -not $out.Contains('[INFO]')) 'stealth mode writes no log lines to the console'
+
+Write-Step 'Event Logs module'
+$r = Invoke-Scan -Name 'scan-eventlogs' -Arguments '--eventlogs -f json'
+Assert-ScanComplete $r 'event-log scan'
+if ($r) {
+    Assert-True ((@($r.scan_info.modules) -join ',') -eq 'Event Logs') 'only the Event Logs module ran'
+    $items = @($r.results | ForEach-Object { $_.item })
+    Assert-True ($items -contains 'Event log configuration') 'event log configuration read (Security/System/Application)'
+    Assert-True ($items -contains 'Failed logons') 'Security log queried for failed logons'
+    Assert-True ($items -contains 'Services installed recently') 'System log queried for service installs'
+    $ev = @($r.results | Where-Object { $_.risk_level -in 'Critical', 'High', 'Medium' } |
+        ForEach-Object { "$($_.risk_level) | $($_.item)" } | Sort-Object -Unique | Select-Object -First 15)
+    Write-Annotation notice "Event Logs module on a clean host: $($r.results.Count) findings`n$($ev -join "`n")"
+}
+
+Write-Step 'Finding IDs and --only / --skip'
+$r = Invoke-Scan -Name 'scan-skip' -Arguments '--accounts --skip "User Accounts" -f json'
+Assert-ScanComplete $r '--skip scan'
+if ($r) {
+    Assert-True (@($r.results | Where-Object { $_.module -eq 'User Accounts' }).Count -eq 0) '--skip "User Accounts" removed every User Accounts finding'
+    Assert-True (@($r.results).Count -gt 0) '--skip kept the other Accounts findings'
+}
+$r = Invoke-Scan -Name 'scan-only' -Arguments '--accounts --only "account-policy/*" -f json'
+Assert-ScanComplete $r '--only scan'
+if ($r) {
+    $res = @($r.results)
+    Assert-True ($res.Count -gt 0 -and @($res | Where-Object { $_.module -ne 'Account Policy' }).Count -eq 0) "--only account-policy/* kept only Account Policy findings ($($res.Count))"
+    Assert-True (@($res | Where-Object { $_.id -notlike 'account-policy/*' }).Count -eq 0) 'every finding carries its ID'
+}
+
+Write-Step 'Baseline comparison'
+$a = Invoke-Scan -Name 'scan-baseline-a' -Arguments '--accounts -f json'
+$aJson = Get-ChildItem -LiteralPath (Join-Path $OutDir 'scan-baseline-a') -Filter 'scan_*.json' -ErrorAction SilentlyContinue | Select-Object -First 1
+Assert-True ($null -ne $aJson) 'baseline report written'
+if ($a -and $aJson) {
+    $b = Invoke-Scan -Name 'scan-baseline-b' -Arguments "--accounts -f json -f html --baseline `"$($aJson.FullName)`""
+    Assert-ScanComplete $b 'baseline comparison scan'
+    if ($b) {
+        Assert-True ($null -ne $b.baseline) 'report has a baseline section'
+        Assert-True ($b.baseline.unchanged -gt 0) "repeat scan matches the baseline ($($b.baseline.unchanged) unchanged, $($b.baseline.new) new, $($b.baseline.resolved_count) resolved)"
+        $marked = @($b.results | Where-Object { $_.details.Baseline -eq 'new' }).Count
+        Assert-True ($marked -eq $b.baseline.new) 'per-finding Baseline marks agree with the summary'
+        $out = Get-Output 'scan-baseline-b'
+        Assert-True ($null -ne $out -and $out.Contains('[BASELINE]')) 'console prints the baseline summary'
+        $html = Get-ChildItem -LiteralPath (Join-Path $OutDir 'scan-baseline-b') -Filter 'scan_*.html' | Select-Object -First 1
+        Assert-True ($null -ne $html -and (Get-Content -Raw -LiteralPath $html.FullName).Contains('Compared With Baseline')) 'HTML report shows the baseline comparison'
+    }
+    $c = Invoke-Scan -Name 'scan-baseline-new' -Arguments "--accounts -f json --baseline `"$($aJson.FullName)`" --new-only"
+    if ($c -and $b) {
+        Assert-True (@($c.results).Count -eq $c.baseline.new) "--new-only reports only new findings ($(@($c.results).Count))"
+    }
+}
+$code = Invoke-Timed -File $Exe -Arguments '--accounts --baseline missing-report.json' -TimeoutSec 60 -Name 'err-missing-baseline'
+Assert-True ($code -eq 1) "missing --baseline file exits 1 (got $code)"
+$code = Invoke-Timed -File $Exe -Arguments '--accounts --new-only' -TimeoutSec 60 -Name 'err-new-only'
+Assert-True ($code -eq 1) "--new-only without --baseline exits 1 (got $code)"
 
 Write-Step 'Error handling'
 $code = Invoke-Timed -File $Exe -Arguments '-c missing-config.json' -TimeoutSec 60 -Name 'err-missing-config'

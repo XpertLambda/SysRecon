@@ -131,6 +131,9 @@ DWORD ReadRegistryDword(HKEY root, const String& subkey, const String& value_nam
 // checks where an unset value has its own (documented) default.
 std::optional<DWORD> TryReadRegistryDword(HKEY root, const String& subkey, const String& value_name);
 std::optional<String> TryReadRegistryString(HKEY root, const String& subkey, const String& value_name);
+// "S-1-5-21-...-1001" -> "DOMAIN\name". Returns the SID string itself when it
+// cannot be parsed or resolved (deleted accounts, offline domain).
+String SidStringToAccountName(const String& sid);
 ByteVector ReadRegistryBinary(HKEY root, const String& subkey, const String& value_name);
 StringVector EnumerateRegistrySubkeys(HKEY root, const String& subkey);
 StringVector EnumerateRegistryValues(HKEY root, const String& subkey);

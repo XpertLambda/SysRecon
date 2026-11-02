@@ -94,6 +94,7 @@ bool ReportGenerator::GenerateJSON(const String& filename) {
         
         for (const auto& result : scan_results_) {
             nlohmann::json result_obj;
+            result_obj["id"] = Core::Utils::WideToUtf8(Core::Findings::FindingId(result));
             result_obj["module"] = Core::Utils::WideToUtf8(result.module_name);
             result_obj["item"] = Core::Utils::WideToUtf8(result.item_name);
             result_obj["description"] = Core::Utils::WideToUtf8(result.description);
@@ -122,6 +123,25 @@ bool ReportGenerator::GenerateJSON(const String& filename) {
             j["results"].push_back(result_obj);
         }
         
+        if (has_baseline_) {
+            json& b = j["baseline"];
+            b["file"] = Core::Utils::WideToUtf8(baseline_source_);
+            b["baseline_timestamp"] = Core::Utils::WideToUtf8(baseline_timestamp_);
+            b["new_only"] = baseline_new_only_;
+            b["new"] = baseline_diff_.new_count;
+            b["unchanged"] = baseline_diff_.unchanged_count;
+            b["resolved_count"] = baseline_diff_.resolved.size();
+            b["resolved"] = json::array();
+            for (const auto& e : baseline_diff_.resolved) {
+                json r;
+                r["id"] = Core::Utils::WideToUtf8(e.id);
+                r["module"] = Core::Utils::WideToUtf8(e.module);
+                r["item"] = Core::Utils::WideToUtf8(e.item);
+                r["risk_level"] = Core::Utils::WideToUtf8(e.risk_level);
+                b["resolved"].push_back(r);
+            }
+        }
+
         // Summary
         j["summary"]["critical"] = critical_count;
         j["summary"]["high"] = high_count;
@@ -167,7 +187,7 @@ bool ReportGenerator::GenerateCSV(const String& filename) {
     file << "\xEF\xBB\xBF";
 
     // Header
-    file << "Module,Item,Risk Level,Description,Remediation,Reference,Details\n";
+    file << "Module,Item,Risk Level,Description,Remediation,Reference,Details,ID\n";
 
     // Every field goes through CsvEscape: it doubles embedded quotes per
     // RFC 4180 (service binary paths routinely contain them) and neutralises
@@ -198,7 +218,8 @@ bool ReportGenerator::GenerateCSV(const String& filename) {
             if (!details_str.empty()) details_str += L"; ";
             details_str += detail.first + L": " + detail.second;
         }
-        file << csv(details_str) << "\n";
+        file << csv(details_str) << ",";
+        file << csv(Core::Findings::FindingId(result)) << "\n";
     }
 
     // Incomplete checks as rows of their own, so a spreadsheet user sees them.
@@ -260,6 +281,24 @@ bool ReportGenerator::GenerateHTML(const String& filename) {
     html << L"<p><strong>Configuration:</strong> " << H(system_info_.config_path) << L"</p>\n";
     html << L"<p><strong>Total Findings:</strong> " << scan_results_.size() << L"</p>\n";
     html << L"</div>\n";
+
+    if (has_baseline_) {
+        html << L"<h2>Compared With Baseline</h2>\n<div class=\"info-box\">\n";
+        html << L"<p><strong>Baseline:</strong> " << H(baseline_source_);
+        if (!baseline_timestamp_.empty()) html << L" (scan " << H(baseline_timestamp_) << L")";
+        html << L"</p>\n<p><strong>New:</strong> " << baseline_diff_.new_count
+             << L" &nbsp; <strong>Unchanged:</strong> " << baseline_diff_.unchanged_count
+             << (baseline_new_only_ ? L" (not listed below)" : L"")
+             << L" &nbsp; <strong>Resolved:</strong> " << baseline_diff_.resolved.size() << L"</p>\n";
+        if (!baseline_diff_.resolved.empty()) {
+            html << L"<p>No longer found:</p>\n<ul>\n";
+            for (const auto& e : baseline_diff_.resolved) {
+                html << L"<li>" << H(e.risk_level) << L" &mdash; " << H(e.module) << L": " << H(e.item) << L"</li>\n";
+            }
+            html << L"</ul>\n";
+        }
+        html << L"</div>\n";
+    }
 
     if (!incomplete_checks_.empty()) {
         html << L"<h2>Incomplete Checks</h2>\n";
@@ -441,8 +480,9 @@ bool ReportGenerator::GenerateSARIF(const String& filename) {
         };
 
         for (const auto& r : scan_results_) {
-            const std::string rule_id =
-                Core::Utils::WideToUtf8(r.module_name + L"/" + r.item_name);
+            // Stable, URL-safe rule IDs (findings.h) rather than raw item
+            // names, so SARIF consumers can track a rule across scans.
+            const std::string rule_id = Core::Utils::WideToUtf8(Core::Findings::FindingId(r));
             auto it = rule_index.find(rule_id);
             if (it == rule_index.end()) {
                 json rule;

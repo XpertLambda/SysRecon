@@ -327,6 +327,26 @@ String ReadRegistryString(HKEY root, const String& subkey, const String& value_n
     return TryReadRegistryString(root, subkey, value_name).value_or(L"");
 }
 
+String SidStringToAccountName(const String& sid) {
+    if (sid.empty()) {
+        return sid;
+    }
+    PSID psid = nullptr;
+    if (!ConvertStringSidToSidW(sid.c_str(), &psid)) {
+        return sid;
+    }
+    wchar_t name[256] = {0};
+    wchar_t domain[256] = {0};
+    DWORD name_len = 256, domain_len = 256;
+    SID_NAME_USE use;
+    String result = sid;
+    if (LookupAccountSidW(nullptr, psid, name, &name_len, domain, &domain_len, &use)) {
+        result = domain[0] ? String(domain) + L"\\" + name : String(name);
+    }
+    LocalFree(psid);
+    return result;
+}
+
 std::optional<DWORD> TryReadRegistryDword(HKEY root, const String& subkey, const String& value_name) {
     HKEY key;
     if (RegOpenKeyExW(root, subkey.c_str(), 0, KEY_READ, &key) != ERROR_SUCCESS) {

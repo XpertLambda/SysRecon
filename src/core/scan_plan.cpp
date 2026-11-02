@@ -14,6 +14,7 @@ bool ModuleSelection::IsEnabled(ModuleType module) const {
         case ModuleType::Registry:  return registry;
         case ModuleType::Memory:    return memory;
         case ModuleType::PrivEsc:   return privesc;
+        case ModuleType::EventLogs: return eventlogs;
         case ModuleType::Domain:    return domain;
         default:                    return false;
     }
@@ -28,6 +29,7 @@ void ModuleSelection::Set(ModuleType module, bool enabled) {
         case ModuleType::Registry:  registry = enabled; break;
         case ModuleType::Memory:    memory = enabled; break;
         case ModuleType::PrivEsc:   privesc = enabled; break;
+        case ModuleType::EventLogs: eventlogs = enabled; break;
         case ModuleType::Domain:    domain = enabled; break;
         default: break;
     }
@@ -68,6 +70,7 @@ ModuleSelection ModuleSelection::FromConfig(const ScanConfig& c) {
     s.registry = c.registry.enabled;
     s.memory = c.memory.enabled;
     s.privesc = c.privesc.enabled;
+    s.eventlogs = c.event_logs.enabled;
     s.domain = c.domain.enabled;
     return s;
 }
@@ -76,7 +79,7 @@ const std::vector<ModuleType>& AllScanModules() {
     static const std::vector<ModuleType> modules = {
         ModuleType::Accounts, ModuleType::Services, ModuleType::Processes,
         ModuleType::Network,  ModuleType::Registry, ModuleType::Memory,
-        ModuleType::PrivEsc,  ModuleType::Domain,
+        ModuleType::PrivEsc,  ModuleType::EventLogs, ModuleType::Domain,
     };
     return modules;
 }
@@ -90,6 +93,7 @@ String ModuleDisplayName(ModuleType module) {
         case ModuleType::Registry:  return L"Registry";
         case ModuleType::Memory:    return L"Memory";
         case ModuleType::PrivEsc:   return L"Privilege Escalation";
+        case ModuleType::EventLogs: return L"Event Logs";
         case ModuleType::Domain:    return L"Domain";
         default:                    return L"Unknown";
     }

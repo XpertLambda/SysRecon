@@ -2,6 +2,7 @@
 
 #include "../sysrecon.h"
 #include "scan_plan.h"
+#include "findings.h"
 #include "../modules/accounts/user_enum.h"
 #include "../modules/services/service_enum.h"
 #include "../modules/processes/process_enum.h"
@@ -10,6 +11,7 @@
 #include "../modules/memory/memory_analyzer.h"
 #include "../modules/privesc/privesc_analyzer.h"
 #include "../modules/domain/domain_recon.h"
+#include "../modules/eventlogs/event_log_analyzer.h"
 #include "../modules/reporting/report_generator.h"
 
 namespace SysRecon {
@@ -85,6 +87,25 @@ public:
     // Used by the CLI to derive a severity-based process exit code.
     SecurityLevel GetMaxSeverity() const;
 
+    // --only / --skip patterns (findings.h PatternSelects), applied after
+    // --min-severity.
+    void SetFindingFilters(const StringVector& only, const StringVector& skip) {
+        only_patterns_ = only;
+        skip_patterns_ = skip;
+    }
+    // --baseline: each result gets a "Baseline" detail (new / unchanged) and
+    // reports list what the baseline had that this scan no longer finds.
+    // With new_only, unchanged findings are dropped from the results.
+    void SetBaseline(const Findings::Baseline& baseline, bool new_only) {
+        baseline_ = baseline;
+        has_baseline_ = true;
+        new_only_ = new_only;
+    }
+    bool HasBaseline() const { return has_baseline_; }
+    // Valid after the first ExportResults().
+    const Findings::BaselineDiff& GetBaselineDiff() const { return baseline_diff_; }
+    size_t GetFilteredCount() const { return filtered_count_; }
+
     bool IsScanning() const { return is_scanning_; }
     float GetProgress() const { return progress_; }
     String GetCurrentModule() const { return current_module_; }
@@ -114,6 +135,7 @@ private:
     std::unique_ptr<Modules::MemoryAnalyzer> memory_analyzer_;
     std::unique_ptr<Modules::PrivEscAnalyzer> privesc_analyzer_;
     std::unique_ptr<Modules::DomainReconAnalyzer> domain_recon_;
+    std::unique_ptr<Modules::EventLogAnalyzer> event_log_analyzer_;
     std::unique_ptr<Modules::ReportGenerator> report_generator_;
 
     String output_directory_;
@@ -124,6 +146,13 @@ private:
     bool stealth_mode_ = false;
     bool is_elevated_ = false;
     SecurityLevel min_severity_ = SecurityLevel::Low;
+    StringVector only_patterns_;
+    StringVector skip_patterns_;
+    Findings::Baseline baseline_;
+    Findings::BaselineDiff baseline_diff_;
+    bool has_baseline_ = false;
+    bool new_only_ = false;
+    size_t filtered_count_ = 0;
     ModuleSelection selection_ = ModuleSelection::FromConfig(ScanConfig{});
 
     std::atomic<bool> is_scanning_{false};

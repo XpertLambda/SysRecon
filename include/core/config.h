@@ -71,6 +71,15 @@ struct ScanConfig {
         bool check_hardening = true;     // SMB/LLMNR/NTLM/LAPS/PS-logging posture
     } privesc;
 
+    // Reads the Security, System and Defender event logs for evidence of
+    // tampering and persistence in the last `lookback_days`, and checks log
+    // sizing. Read-only; the Security log needs Administrator rights.
+    struct {
+        bool enabled = true;
+        size_t lookback_days = 7;
+        size_t failed_logon_threshold = 20;
+    } event_logs;
+
     // Domain recon is opt-in (like memory): off unless requested with --domain
     // or enabled here, and it only does anything on a domain-joined host.
     struct {

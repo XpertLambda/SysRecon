@@ -4,6 +4,50 @@ All notable changes to SysRecon are documented here.
 
 ## [Unreleased]
 
+## [1.8.0] — 2026-11-02
+
+### Added
+
+- **Event Logs module** (`--eventlogs`, on by default; `modules.event_logs` in
+  `config.json` with `lookback_days` and `failed_logon_threshold`). Read-only
+  review of the Security, System and Defender logs:
+  - disabled logs and logs smaller than the CIS sizes (Group Policy `MaxSize`
+    honoured);
+  - cleared logs (1102 / 104) and who cleared them;
+  - new services (7045): command-interpreter / script-host services are High,
+    binaries in user-writable locations or on shares Medium;
+  - accounts created (4720) and added to privileged groups
+    (4728 / 4732 / 4756);
+  - failed-logon volume (4625) with top accounts and sources;
+  - Defender detections (1116) and real-time protection turned off (5001).
+  Event XML is parsed by portable, unit-tested functions
+  (`Core::Text::XmlElementText`, `EventDataValue`, `XmlAttribute`,
+  `ServiceInstallSeverity`, `IsPrivilegedGroupSid`).
+- **Finding IDs**: every finding has a stable `<module>/<item>` ID (`id` in
+  JSON, `ID` column in CSV, SARIF `ruleId`).
+- **`--only` / `--skip`** filter findings by ID with `*` / `?` wildcards; a
+  pattern without `/` matches the module.
+- **`--baseline report.json`** compares with an earlier JSON report (any
+  version): each finding is marked new or unchanged, and JSON/HTML reports list
+  resolved findings. **`--new-only`** reports only new findings; with
+  `--exit-code` it fails a pipeline only on regressions.
+- **Network**: firewall rules are reviewed through `INetFwPolicy2`; an enabled
+  inbound allow rule open to any address on any port for any program is High,
+  and remote-administration / file-sharing ports open to any address on the
+  Public profile are Medium. Listening ports name the service(s) hosted by the
+  owning process.
+- Interactive menu: Event Logs in the module selection.
+- Windows end-to-end test covers the Event Logs module, `--only`, `--skip`,
+  `--baseline` and `--new-only`, and publishes the Event Logs finding profile
+  of a clean CI host. 133 unit tests (was 113).
+
+### Changed
+
+- SARIF `ruleId`s are the new finding IDs instead of raw module/item text.
+- CSV reports have a trailing `ID` column.
+- `--all` now also runs the Event Logs module (still not Domain).
+- A config with only Event Logs or Domain enabled is valid.
+
 ## [1.7.1] — 2026-11-02
 
 ### Fixed — found by the Windows CI jobs on real Windows

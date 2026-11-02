@@ -1,6 +1,6 @@
 # SysRecon - Windows Security Audit & Reconnaissance Tool
 
-[![Version](https://img.shields.io/badge/version-1.7.1-blue.svg)](https://github.com/XpertLambda/SysRecon/releases)
+[![Version](https://img.shields.io/badge/version-1.8.0-blue.svg)](https://github.com/XpertLambda/SysRecon/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010/11%20|%20Server%202016+-blue.svg)](https://github.com/XpertLambda/SysRecon)
 [![Language](https://img.shields.io/badge/language-C++20-orange.svg)](https://github.com/XpertLambda/SysRecon)
 [![License](https://img.shields.io/badge/license-Commercial-red.svg)](LICENSE)
@@ -41,7 +41,7 @@ SysRecon is an enterprise-class security assessment platform designed to provide
 - **Enterprise Architecture**: Built with C++20 for optimal performance and minimal system footprint
 - **Flexible Deployment**: Cross-platform compilation support with native Windows execution
 - **Professional Reporting**: Multi-format output including JSON, CSV, and HTML with executive summaries and detailed technical findings
-- **Tested**: 113 unit tests and end-to-end CI on real Windows (Server 2025 and Windows 11) on every push
+- **Tested**: 133 unit tests and end-to-end CI on real Windows (Server 2025 and Windows 11) on every push
 
 ---
 
@@ -75,10 +75,15 @@ SysRecon is an enterprise-class security assessment platform designed to provide
 #### Network Infrastructure Assessment
 
 - Active TCP/UDP connection enumeration with remote endpoint resolution
-- Listening port analysis and service binding identification
+- Listening port analysis, with each port attributed to the Windows service(s)
+  running in the owning process (`135/svchost.exe (RpcSs)`)
 - Network interface discovery including MAC addresses, IP configurations, and DHCP status
 - Network share enumeration with permission analysis
-- Windows Firewall rule and policy assessment
+- Windows Firewall service and per-profile state
+- Firewall rule review (`INetFwPolicy2`): enabled inbound allow rules open to
+  **any** remote address on **any** port for any program (High), and rules
+  exposing SSH/Telnet/RPC/NetBIOS/SMB/RDP/WinRM to any address on the Public
+  profile (Medium) (T1562.004)
 - Network adapter configuration review
 
 #### Registry Security Analysis
@@ -148,6 +153,31 @@ reads a secret value):
 
 > SysRecon never exploits a finding or extracts a secret: credential checks
 > report presence and location only.
+
+#### Event Log Review (`--eventlogs`, on by default)
+
+Reads the Security, System and Microsoft Defender logs for the last
+`lookback_days` (default 7). Read-only: it never clears, writes or subscribes.
+Reading the Security log needs Administrator rights; without them the affected
+checks are listed as incomplete in the report.
+
+- **Log configuration**: disabled Security/System/Application/PowerShell
+  Operational logs (T1562.002); logs smaller than the CIS sizes (Security
+  192 MB, System and Application 32 MB), honouring Group Policy `MaxSize`
+- **Cleared logs**: Security 1102 and System 104, with who cleared them
+  (T1070.001)
+- **New services** (System 7045): services that run a command interpreter or
+  script host directly, the PsExec/Metasploit pattern, are High (T1569.002);
+  services whose binary is in a user-writable location or on a share are
+  Medium (T1543.003); the rest are listed in one informational entry
+- **Accounts**: accounts created (4720, T1136.001) and additions to privileged
+  groups (4728/4732/4756 into Administrators, Backup Operators, Remote Desktop
+  Users, Domain/Enterprise/Schema Admins; T1098)
+- **Failed logons** (4625): count, top accounts and top source addresses;
+  Medium at or above `failed_logon_threshold` (default 20), High at ten times
+  it (T1110)
+- **Microsoft Defender**: detections (1116) and real-time protection being
+  turned off (5001, T1562.001)
 
 #### Light Domain Reconnaissance (`--domain`, opt-in)
 
@@ -298,7 +328,7 @@ SysRecon includes a professional Windows installer with full GUI for easy deploy
 
 #### Quick Start:
 
-1. Download `SysRecon-Setup-1.7.1.exe` from releases
+1. Download `SysRecon-Setup-1.8.0.exe` from releases
 2. Right-click → **"Run as Administrator"**
 3. Follow the installation wizard
 4. Launch from Start Menu → SysRecon
@@ -316,7 +346,7 @@ build.bat
 REM Create installer
 build-installer.bat
 
-REM Result: SysRecon-Setup-1.7.1.exe
+REM Result: SysRecon-Setup-1.8.0.exe
 ```
 
 **Linux (Cross-compilation):**
@@ -331,7 +361,7 @@ sudo apt install nsis  # Ubuntu
 # Create installer
 ./build-installer.sh
 
-# Result: SysRecon-Setup-1.7.1.exe (transfer to Windows)
+# Result: SysRecon-Setup-1.8.0.exe (transfer to Windows)
 ```
 
 ---
@@ -487,6 +517,9 @@ sysrecon.exe --memory
 
 REM Local privilege-escalation assessment
 sysrecon.exe --privesc
+
+REM Event log review (cleared logs, new services/accounts, failed logons)
+sysrecon.exe --eventlogs
 ```
 
 A module flag **replaces** the config file's module selection, so
@@ -592,7 +625,37 @@ Leverages custom configuration profiles for compliance-specific assessments.
 |--------|----------|-------------|
 | `-c, --config` | `<file>` | Load configuration from a JSON file. Default: `.\config.json`, then `config.json` next to `sysrecon.exe`. A missing or invalid explicit file is an error |
 | `-o, --output` | `<directory>` | Output directory (default: the config's `output_directory`, resolved against the config file's folder) |
-| `-f, --format` | `<format>` | Report format: `json`, `csv`, `html`, `all` (default: the config's `generate_*` settings) |
+| `-f, --format` | `<format>` | Report format: `json`, `csv`, `html`, `sarif`, `navigator`, `all` (default: the config's `generate_*` settings) |
+| `--min-severity` | `<level>` | Only report findings at or above `low`/`medium`/`high`/`critical` |
+| `--exit-code` | | Exit code reflects the highest finding severity (see Exit Codes) |
+
+### Finding Filters and Baselines
+
+Every finding has a stable ID, `<module>/<item>`, built from its module and
+item names only (lower case, other characters collapsed to `-`), for example
+`privilege-escalation/writable-directory-on-path-c-tools`. It is the `id`
+field in JSON, the `ID` column in CSV and the SARIF `ruleId`.
+
+| Option | Argument | Description |
+|--------|----------|-------------|
+| `--only` | `<pattern>` | Report only findings whose ID matches. Repeatable or comma-separated. `*` and `?` are wildcards; a pattern **without** `/` matches the module part, so `--only network` keeps every Network finding |
+| `--skip` | `<pattern>` | Drop matching findings (applied after `--only`) |
+| `--baseline` | `<report.json>` | Compare with an earlier SysRecon JSON report. Each finding gets a `Baseline: new` or `unchanged` detail; JSON and HTML reports list the findings the baseline had that are now gone (`resolved`) |
+| `--new-only` | | With `--baseline`, report only new findings |
+
+```cmd
+REM Everything except the local account inventory
+sysrecon.exe --skip "user-accounts"
+
+REM Only the writable-PATH and unquoted-path findings
+sysrecon.exe --only "privilege-escalation/writable-directory-on-path*,privilege-escalation/unquoted*"
+
+REM Drift check in a pipeline: fail only on findings that are new since the golden image
+sysrecon.exe -f json -o .\reports --baseline golden.json --new-only --exit-code
+```
+
+Comparison is by ID, counting duplicates: a description that changes between
+scans (counts, timestamps) does not make a finding new.
 
 ### Module Selection
 
@@ -604,7 +667,10 @@ Leverages custom configuration profiles for compliance-specific assessments.
 | `--network` | Network Infrastructure | Connections, interfaces, shares, firewall rules |
 | `--registry` | Registry Analysis | Persistence keys, security policies, ACL analysis |
 | `--memory` | Memory Forensics | Injection and process-hollowing detection (see the limitation note under Memory Forensics) |
-| `--all` | All Modules | All six modules, including Memory |
+| `--privesc` | Privilege Escalation | Local privilege-escalation assessment |
+| `--eventlogs` | Event Logs | Cleared logs, new services and accounts, privileged group changes, failed logons, Defender detections, log sizes |
+| `--domain` | Domain | Light AD recon on domain-joined hosts (opt-in) |
+| `--all` | All Modules | Every module except Domain, including Memory |
 
 Without any module flag, the modules enabled in `config.json` run. With one or
 more flags, exactly those modules run, whatever the config says.
@@ -656,7 +722,7 @@ sysrecon.exe --privesc --min-severity high --exit-code -f sarif -o .\out
 ```json
 {
   "scan_info": {
-    "version": "1.7.1",
+    "version": "1.8.0",
     "timestamp": "20261101_212458",
     "hostname": "WORKSTATION-01",
     "os_version": "Windows 11 (Build 22631)",
@@ -1032,7 +1098,7 @@ makensis -VERSION  # Should show v3.11 or higher
 # 2. Run installer build script
 ./build-installer.sh
 
-# Output: SysRecon-Setup-1.7.1.exe (~3.9 MB)
+# Output: SysRecon-Setup-1.8.0.exe (~3.9 MB)
 ```
 
 **What the installer includes:**
@@ -1053,7 +1119,7 @@ makensis -VERSION  # Should show v3.11 or higher
 
 **Option 1: Windows Installer (Recommended) ⭐**
 ```
-📦 SysRecon-Setup-1.7.1.exe  (3.9 MB)
+📦 SysRecon-Setup-1.8.0.exe  (3.9 MB)
    - Complete installation package
    - Professional setup wizard
    - Easy uninstallation
@@ -1061,7 +1127,7 @@ makensis -VERSION  # Should show v3.11 or higher
 
 **Option 2: Portable Package**
 ```
-📦 SysRecon-1.7.1-Portable.zip  (~17 MB)
+📦 SysRecon-1.8.0-Portable.zip  (~17 MB)
    ├── sysrecon.exe          # Main executable
    ├── config.json           # Configuration
    ├── README.md             # Documentation
@@ -1072,7 +1138,7 @@ makensis -VERSION  # Should show v3.11 or higher
 **Option 3: Both (Complete Distribution)**
 ```
 Upload to GitHub Release:
-   ├── SysRecon-Setup-1.7.1.exe    # Installer
+   ├── SysRecon-Setup-1.8.0.exe    # Installer
    ├── sysrecon.exe                # Portable executable
    ├── checksums.txt               # SHA256 hashes
    └── Source code (auto-generated by GitHub)
@@ -1082,11 +1148,11 @@ Upload to GitHub Release:
 
 ```bash
 # Generate SHA256 checksums for verification
-sha256sum SysRecon-Setup-1.7.1.exe > checksums.txt
+sha256sum SysRecon-Setup-1.8.0.exe > checksums.txt
 sha256sum build/sysrecon.exe >> checksums.txt
 
 # Users can verify integrity on Windows:
-# Get-FileHash -Algorithm SHA256 SysRecon-Setup-1.7.1.exe
+# Get-FileHash -Algorithm SHA256 SysRecon-Setup-1.8.0.exe
 ```
 
 ### Required Files Summary
@@ -1096,7 +1162,7 @@ sha256sum build/sysrecon.exe >> checksums.txt
 - `config.json` (configuration file)
 
 **Recommended (Complete):**
-- `SysRecon-Setup-1.7.1.exe` (installer - includes everything)
+- `SysRecon-Setup-1.8.0.exe` (installer - includes everything)
 - `checksums.txt` (file verification)
 - Documentation (README, CHANGELOG)
 
@@ -1387,8 +1453,8 @@ A: Yes. `/S` installs silently with the default components; add `/ADDTOPATH`
 to also add the install directory to the machine PATH. `/S` on the
 uninstaller removes it silently and keeps generated reports:
 ```cmd
-SysRecon-Setup-1.7.1.exe /S
-SysRecon-Setup-1.7.1.exe /S /ADDTOPATH
+SysRecon-Setup-1.8.0.exe /S
+SysRecon-Setup-1.8.0.exe /S /ADDTOPATH
 "C:\Program Files\SysRecon\Uninstall.exe" /S
 ```
 An upgrade (`/S` over an existing install) keeps your edited `config.json`.
@@ -1558,7 +1624,7 @@ To the information security community for continuous research, threat intelligen
 
 ## Project Status
 
-**Current Version**: 1.7.1  
+**Current Version**: 1.8.0  
 **Release Date**: November 2, 2026  
 **Status**: ✅ **Production-Ready**  
 **Maintenance**: 🟢 **Actively Maintained**
@@ -1585,7 +1651,7 @@ To the information security community for continuous research, threat intelligen
 
 - ✅ Continuous integration (GitHub Actions): native unit tests, Windows
   cross-compile, and a wine smoke test on every push and pull request
-- ✅ Unit tests (113) for the platform-independent core (`sysrecon_core`):
+- ✅ Unit tests (133) for the platform-independent core (`sysrecon_core`):
   report escaping (HTML/CSV), whitelist matching, path handling, IPv4 parsing,
   UTF-8 conversion, `Utils`, `Logger`, `config.json` parsing and validation
   (including the shipped file), module/format/config-path precedence, registry
@@ -1700,7 +1766,7 @@ SysRecon is built with security in mind:
 
 <p align="center">
   <strong>SysRecon - Professional Windows Security Assessment Platform</strong><br>
-  <sub>Version 1.7.1 | Platform: Windows 10/11, Server 2016+</sub><br><br>
+  <sub>Version 1.8.0 | Platform: Windows 10/11, Server 2016+</sub><br><br>
   <sub>Engineered for security professionals. Built for enterprise environments.</sub><br><br>
   <sub>Copyright © 2025 XpertLambda. All Rights Reserved.</sub>
 </p>

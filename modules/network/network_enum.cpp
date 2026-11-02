@@ -3,6 +3,10 @@
 #include <lm.h>
 #include "../../include/core/text_utils.h"
 
+#ifdef _WIN32
+#include <netfw.h>
+#endif
+
 namespace SysRecon {
 namespace Modules {
 
@@ -131,6 +135,42 @@ bool NetworkEnumerator::EnumerateConnections() {
     return true;
 }
 
+namespace {
+
+#ifdef _WIN32
+// Service names hosted by each running process, so a listening port can be
+// attributed to "svchost.exe (RpcSs)" rather than just "svchost.exe".
+std::map<DWORD, StringVector> ServicesByPid() {
+    std::map<DWORD, StringVector> result;
+    SC_HANDLE scm = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_ENUMERATE_SERVICE);
+    if (scm == nullptr) {
+        return result;
+    }
+    DWORD needed = 0, count = 0, resume = 0;
+    std::vector<BYTE> buf;
+    EnumServicesStatusExW(scm, SC_ENUM_PROCESS_INFO, SERVICE_WIN32, SERVICE_ACTIVE, nullptr, 0,
+                          &needed, &count, &resume, nullptr);
+    if (GetLastError() == ERROR_MORE_DATA && needed > 0) {
+        buf.resize(needed);
+        resume = 0;
+        if (EnumServicesStatusExW(scm, SC_ENUM_PROCESS_INFO, SERVICE_WIN32, SERVICE_ACTIVE, buf.data(),
+                                  static_cast<DWORD>(buf.size()), &needed, &count, &resume, nullptr)) {
+            auto* services = reinterpret_cast<ENUM_SERVICE_STATUS_PROCESSW*>(buf.data());
+            for (DWORD i = 0; i < count; ++i) {
+                const DWORD pid = services[i].ServiceStatusProcess.dwProcessId;
+                if (pid != 0 && services[i].lpServiceName) {
+                    result[pid].push_back(services[i].lpServiceName);
+                }
+            }
+        }
+    }
+    CloseServiceHandle(scm);
+    return result;
+}
+#endif
+
+}  // namespace
+
 bool NetworkEnumerator::EnumerateListeningPorts() {
     if (!initialized_) return false;
 
@@ -143,6 +183,9 @@ bool NetworkEnumerator::EnumerateListeningPorts() {
     }
 
     listening_ports_.clear();
+#ifdef _WIN32
+    const auto services = ServicesByPid();
+#endif
     for (const auto& conn : connections_) {
         if (conn.state == L"LISTENING" || conn.protocol == L"UDP") {
             ListeningPort port;
@@ -153,6 +196,15 @@ bool NetworkEnumerator::EnumerateListeningPorts() {
             port.address = conn.local_address;
             port.is_system_port = (conn.local_port < 1024);
             port.is_filtered = false;
+#ifdef _WIN32
+            if (auto it = services.find(conn.process_id); it != services.end()) {
+                StringVector names = it->second;
+                const size_t total = names.size();
+                if (names.size() > 3) names.resize(3);
+                port.service_name = Core::Utils::Join(names, L", ") +
+                                    (total > 3 ? L", +" + std::to_wstring(total - 3) : String());
+            }
+#endif
             port.risk_level = AssessPortRisk(port);
             listening_ports_.push_back(port);
         }
@@ -176,7 +228,8 @@ void NetworkEnumerator::ReportListeningPorts() {
             continue;
         }
         if (port.protocol == L"TCP") {
-            exposed.push_back(std::to_wstring(port.port) + L"/" + port.process_name);
+            exposed.push_back(std::to_wstring(port.port) + L"/" + port.process_name +
+                              (port.service_name.empty() ? String() : L" (" + port.service_name + L")"));
         }
         if (port.risk_level == SecurityLevel::Low) {
             continue;
@@ -192,6 +245,9 @@ void NetworkEnumerator::ReportListeningPorts() {
         result.details[L"Protocol"] = port.protocol;
         result.details[L"Process"] = port.process_name;
         result.details[L"PID"] = std::to_wstring(port.process_id);
+        if (!port.service_name.empty()) {
+            result.details[L"Service"] = port.service_name;
+        }
         result.details[L"Note"] = L"Reachability also depends on the firewall; confirm the service is needed";
         result.details[L"Technique"] = L"T1133 External Remote Services / T1210 Exploitation of Remote Services";
         result.timestamp = std::chrono::system_clock::now();
@@ -553,6 +609,169 @@ bool NetworkEnumerator::AnalyzeFirewall() {
     return true;
 #else
     SYSRECON_LOG_INFO(L"Firewall analysis only available on Windows");
+    return false;
+#endif
+}
+
+bool NetworkEnumerator::AnalyzeFirewallRules() {
+    if (!initialized_) return false;
+
+    SYSRECON_LOG_INFO(L"Analyzing firewall rules...");
+
+#ifdef _WIN32
+    // GUIDs spelled out so the build does not depend on which import library
+    // (uuid, firewallapi) a toolchain defines them in.
+    static const CLSID kClsidNetFwPolicy2 =
+        {0xE2B3C97F, 0x6AE1, 0x41AC, {0x81, 0x7A, 0xF6, 0xF9, 0x21, 0x66, 0xD7, 0xDD}};
+    static const IID kIidINetFwPolicy2 =
+        {0x98325047, 0xC671, 0x4174, {0x8D, 0x81, 0xDE, 0xFC, 0xD3, 0xF0, 0x31, 0x86}};
+    static const IID kIidINetFwRule =
+        {0xAF230D27, 0xBABA, 0x4E42, {0xAC, 0xED, 0xF5, 0x24, 0xF2, 0x2C, 0xFC, 0xE2}};
+    static const IID kIidIEnumVARIANT =
+        {0x00020404, 0x0000, 0x0000, {0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
+
+    const HRESULT init = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    const bool need_uninit = (init == S_OK || init == S_FALSE);
+    if (init != S_OK && init != S_FALSE && init != RPC_E_CHANGED_MODE) {
+        SYSRECON_LOG_ERROR(L"COM initialization failed; firewall rules not analyzed");
+        return false;
+    }
+
+    bool ok = false;
+    INetFwPolicy2* policy = nullptr;
+    INetFwRules* rules = nullptr;
+    IUnknown* enum_unknown = nullptr;
+    IEnumVARIANT* rule_enum = nullptr;
+
+    struct Flagged { int severity; String name; String ports; String remote; String program; String service; long profiles; };
+    std::map<String, Flagged> flagged;   // keyed by rule name: built-in rules are often duplicated
+    size_t total_rules = 0;
+
+    auto bstr = [](BSTR b) {
+        String s = b ? String(b, SysStringLen(b)) : String();
+        if (b) SysFreeString(b);
+        return s;
+    };
+
+    if (SUCCEEDED(CoCreateInstance(kClsidNetFwPolicy2, nullptr, CLSCTX_INPROC_SERVER, kIidINetFwPolicy2,
+                                   reinterpret_cast<void**>(&policy))) && policy &&
+        SUCCEEDED(policy->get_Rules(&rules)) && rules &&
+        SUCCEEDED(rules->get__NewEnum(&enum_unknown)) && enum_unknown &&
+        SUCCEEDED(enum_unknown->QueryInterface(kIidIEnumVARIANT, reinterpret_cast<void**>(&rule_enum))) &&
+        rule_enum) {
+        ok = true;
+        VARIANT var;
+        VariantInit(&var);
+        ULONG fetched = 0;
+        while (rule_enum->Next(1, &var, &fetched) == S_OK && fetched == 1) {
+            INetFwRule* rule = nullptr;
+            if (var.vt == VT_DISPATCH && var.pdispVal &&
+                SUCCEEDED(var.pdispVal->QueryInterface(kIidINetFwRule, reinterpret_cast<void**>(&rule))) && rule) {
+                ++total_rules;
+                Core::Text::FirewallRuleView view;
+                VARIANT_BOOL enabled = VARIANT_FALSE;
+                NET_FW_RULE_DIRECTION direction = NET_FW_RULE_DIR_OUT;
+                NET_FW_ACTION action = NET_FW_ACTION_BLOCK;
+                long profiles = 0, protocol = 256;
+                BSTR b = nullptr;
+                rule->get_Enabled(&enabled);
+                rule->get_Direction(&direction);
+                rule->get_Action(&action);
+                rule->get_Profiles(&profiles);
+                rule->get_Protocol(&protocol);
+                view.enabled = (enabled == VARIANT_TRUE);
+                view.inbound = (direction == NET_FW_RULE_DIR_IN);
+                view.allow = (action == NET_FW_ACTION_ALLOW);
+                view.public_profile = (profiles & NET_FW_PROFILE2_PUBLIC) != 0;
+                view.protocol = static_cast<int>(protocol);
+                // Cheap fields first: most rules are disabled or outbound.
+                if (view.enabled && view.inbound && view.allow) {
+                    if (SUCCEEDED(rule->get_RemoteAddresses(&b))) view.remote_addresses = bstr(b);
+                    b = nullptr;
+                    if (SUCCEEDED(rule->get_LocalPorts(&b))) view.local_ports = bstr(b);
+                    b = nullptr;
+                    if (SUCCEEDED(rule->get_ApplicationName(&b))) view.application = bstr(b);
+                    b = nullptr;
+                    if (SUCCEEDED(rule->get_ServiceName(&b))) view.service = bstr(b);
+                    b = nullptr;
+                    const int severity = Core::Text::FirewallRuleSeverity(view);
+                    if (severity > 0) {
+                        String name;
+                        if (SUCCEEDED(rule->get_Name(&b))) name = bstr(b);
+                        if (name.empty()) name = L"(unnamed rule)";
+                        auto& f = flagged[name];
+                        if (severity > f.severity) {
+                            f = {severity, name, view.local_ports, view.remote_addresses,
+                                 view.application, view.service, profiles};
+                        }
+                    }
+                }
+                rule->Release();
+            }
+            VariantClear(&var);
+        }
+    }
+
+    if (rule_enum) rule_enum->Release();
+    if (enum_unknown) enum_unknown->Release();
+    if (rules) rules->Release();
+    if (policy) policy->Release();
+    if (need_uninit) CoUninitialize();
+
+    if (!ok) {
+        SYSRECON_LOG_ERROR(L"Could not enumerate Windows Firewall rules (INetFwPolicy2)");
+        return false;
+    }
+
+    for (const auto& [name, f] : flagged) {
+        auto profile_names = [](long p) {
+            if ((p & 0x7) == 0x7) return String(L"All");
+            StringVector v;
+            if (p & NET_FW_PROFILE2_DOMAIN) v.push_back(L"Domain");
+            if (p & NET_FW_PROFILE2_PRIVATE) v.push_back(L"Private");
+            if (p & NET_FW_PROFILE2_PUBLIC) v.push_back(L"Public");
+            return Core::Utils::Join(v, L", ");
+        };
+        ScanResult result;
+        result.module_name = L"Firewall";
+        result.details[L"Rule"] = name;
+        result.details[L"Local Ports"] = f.ports.empty() ? String(L"*") : f.ports;
+        result.details[L"Remote Addresses"] = f.remote.empty() ? String(L"*") : f.remote;
+        result.details[L"Program"] = f.program.empty() ? String(L"Any") : f.program;
+        result.details[L"Service"] = (f.service.empty() || f.service == L"*") ? String(L"Any") : f.service;
+        result.details[L"Profiles"] = profile_names(f.profiles);
+        result.details[L"Technique"] = L"T1562.004 Impair Defenses: Disable or Modify System Firewall";
+        if (f.severity >= 3) {
+            result.item_name = L"Inbound rule allows all traffic: " + name;
+            result.description = L"An enabled inbound firewall rule allows any program on any port from any "
+                                 L"address, so the firewall filters nothing for that traffic";
+            result.risk_level = SecurityLevel::High;
+        } else {
+            result.item_name = L"Inbound admin port open to any address: " + name;
+            result.description = L"An enabled inbound rule exposes a remote-administration or file-sharing port "
+                                 L"to any address on Public networks";
+            result.risk_level = SecurityLevel::Medium;
+        }
+        result.remediation = L"Disable the rule if it is not needed, or restrict it: "
+                             L"Set-NetFirewallRule -Name '<rule>' -RemoteAddress LocalSubnet "
+                             L"(or the management network).";
+        result.reference = L"T1562.004";
+        result.timestamp = std::chrono::system_clock::now();
+        scan_results_.push_back(result);
+    }
+
+    ScanResult inventory;
+    inventory.module_name = L"Firewall";
+    inventory.item_name = L"Firewall rules";
+    inventory.description = std::to_wstring(total_rules) + L" firewall rules reviewed; " +
+                            std::to_wstring(flagged.size()) + L" inbound rule(s) open to any address flagged";
+    inventory.risk_level = SecurityLevel::Low;
+    inventory.timestamp = std::chrono::system_clock::now();
+    scan_results_.push_back(inventory);
+
+    SYSRECON_LOG_INFO(L"Firewall rule analysis complete");
+    return true;
+#else
     return false;
 #endif
 }

@@ -95,6 +95,72 @@ bool GrantsFileModification(uint32_t mask);
 // Never returns an empty string.
 WString SanitizeFileName(const WString& name);
 
+// --- Event log decisions ---------------------------------------------------
+// The Event Logs module renders each event as XML (EvtRenderEventXml) and
+// reads fields with these. Event data is attacker-influenced (account and
+// service names, image paths), so parsing is bounded, never throws, and
+// decodes only the five predefined XML entities.
+
+// Text of the first <name ...>text</name> element, entity-decoded. Matches the
+// local name exactly (<SubjectUserName> does not match "UserName"). Returns
+// an empty string if absent or self-closing.
+WString XmlElementText(const WString& xml, const WString& name);
+
+// Value of <Data Name='name'>value</Data> (either quote style), as used in
+// EventData. Empty if absent.
+WString EventDataValue(const WString& xml, const WString& name);
+
+// Value of attribute `attr` on the first <element ...> tag, e.g.
+// XmlAttribute(xml, L"TimeCreated", L"SystemTime"). Empty if absent.
+WString XmlAttribute(const WString& xml, const WString& element, const WString& attr);
+
+// Decodes &lt; &gt; &amp; &quot; &apos; and numeric &#N; / &#xN; references.
+// Anything else is left as-is.
+WString XmlDecode(const WString& text);
+
+// Severity of a service installed according to event 7045, from its image
+// path: 3 (High) when it launches a script host or LOLBin directly (cmd,
+// powershell, pwsh, mshta, rundll32, regsvr32, wscript, cscript) or carries an
+// encoded command; 2 (Medium) when the binary is in a user-writable location
+// (see IsUserWritableExecutionPath) or is a UNC path; 0 (informational)
+// otherwise. Values match SecurityLevel.
+int ServiceInstallSeverity(const WString& image_path);
+
+// True for well-known privileged group SIDs: BUILTIN\Administrators
+// (S-1-5-32-544), Backup Operators (-551), Remote Desktop Users (-555),
+// and domain RIDs 512 (Domain Admins), 518 (Schema Admins), 519 (Enterprise
+// Admins).
+bool IsPrivilegedGroupSid(const WString& sid);
+
+// CIS minimum size, in KB, for the classic logs: 196608 for Security, 32768
+// for Application and System. 0 for any other channel (no requirement).
+uint64_t RecommendedLogSizeKb(const WString& channel);
+
+// --- Firewall rule decisions -----------------------------------------------
+
+struct FirewallRuleView {
+    bool enabled = false;
+    bool inbound = false;
+    bool allow = false;
+    bool public_profile = false;     // Rule applies to the Public profile.
+    WString remote_addresses;        // "*" = any
+    WString local_ports;             // "*" = any
+    WString application;             // Empty = any program
+    WString service;                 // Empty or "*" = any service
+    int protocol = 256;              // IANA number; 256 = any
+};
+
+// 3 (High): enabled inbound allow rule open to any remote address, on any
+// local port, for any program and service -- the firewall does nothing for
+// that traffic. 2 (Medium): enabled inbound allow from any address, on the
+// Public profile, to a remote-administration or file-sharing port (22, 23,
+// 135, 139, 445, 3389, 5985, 5986). 0 otherwise.
+int FirewallRuleSeverity(const FirewallRuleView& rule);
+
+// True if a firewall port list ("80,443,5000-5010", "RPC", "*") includes
+// `port`. Keywords such as "RPC" or "Ply2Disc" never match a number.
+bool PortListIncludes(const WString& ports, int port);
+
 }
 }
 }

@@ -47,6 +47,11 @@
             "check_defender": true,
             "check_hardening": true
         },
+        "event_logs": {
+            "enabled": true,
+            "lookback_days": 7,
+            "failed_logon_threshold": 20
+        },
         "domain": {
             "enabled": false
         }
