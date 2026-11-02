@@ -77,6 +77,13 @@ public:
     void ClearResults();
     bool ExportResults(const String& format, const String& filename);
 
+    // Findings below this severity are dropped from the collected results and
+    // from every report (CLI --min-severity). Default Low keeps everything.
+    void SetMinSeverity(SecurityLevel level) { min_severity_ = level; }
+    // Highest severity among the collected results, or Low when there are none.
+    // Used by the CLI to derive a severity-based process exit code.
+    SecurityLevel GetMaxSeverity() const;
+
     bool IsScanning() const { return is_scanning_; }
     float GetProgress() const { return progress_; }
     String GetCurrentModule() const { return current_module_; }
@@ -114,6 +121,7 @@ private:
     bool config_loaded_ = false;
     bool stealth_mode_ = false;
     bool is_elevated_ = false;
+    SecurityLevel min_severity_ = SecurityLevel::Low;
     ModuleSelection selection_ = ModuleSelection::FromConfig(ScanConfig{});
 
     std::atomic<bool> is_scanning_{false};

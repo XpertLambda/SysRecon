@@ -16,6 +16,7 @@ void ScanEngine::Reset() {
     config_path_.clear();
     output_directory_.clear();
     stealth_mode_ = false;
+    min_severity_ = SecurityLevel::Low;
     selection_ = ModuleSelection::FromConfig(ScanConfig{});
     progress_.store(0.0f);
     current_module_.clear();
@@ -438,6 +439,19 @@ void ScanEngine::CollectResults() {
     if (memory_analyzer_)   collect(memory_analyzer_->GetScanResults(), L"memory");
     if (privesc_analyzer_)  collect(privesc_analyzer_->GetScanResults(), L"privilege-escalation");
 
+    // Drop anything below the configured minimum severity (CLI --min-severity).
+    if (min_severity_ != SecurityLevel::Low) {
+        const size_t before = scan_results_.size();
+        scan_results_.erase(
+            std::remove_if(scan_results_.begin(), scan_results_.end(),
+                [this](const ScanResult& r) { return r.risk_level < min_severity_; }),
+            scan_results_.end());
+        if (before != scan_results_.size()) {
+            SYSRECON_LOG_INFO(L"Filtered out " + std::to_wstring(before - scan_results_.size()) +
+                              L" finding(s) below the minimum severity");
+        }
+    }
+
     // Highest risk first, so the top of every report is what matters most.
     std::stable_sort(scan_results_.begin(), scan_results_.end(),
                      [](const ScanResult& a, const ScanResult& b) { return a.risk_level > b.risk_level; });
@@ -487,9 +501,21 @@ bool ScanEngine::ExportResults(const String& format, const String& filename) {
         return report_generator_->GenerateCSV(filename);
     } else if (format == L"html") {
         return report_generator_->GenerateHTML(filename);
+    } else if (format == L"sarif") {
+        return report_generator_->GenerateSARIF(filename);
+    } else if (format == L"navigator") {
+        return report_generator_->GenerateAttackNavigatorLayer(filename);
     }
     SYSRECON_LOG_ERROR(L"Unsupported format: " + format);
     return false;
+}
+
+SecurityLevel ScanEngine::GetMaxSeverity() const {
+    SecurityLevel max = SecurityLevel::Low;
+    for (const auto& r : scan_results_) {
+        if (r.risk_level > max) max = r.risk_level;
+    }
+    return max;
 }
 
 bool ScanEngine::CheckPrivileges() {

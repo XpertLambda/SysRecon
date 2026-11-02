@@ -57,6 +57,13 @@ ModuleSelection ResolveModules(const ScanConfig& config, const CliModuleRequest&
 // generate_json/csv/html flags apply. Never returns an empty list.
 StringVector ResolveFormats(const StringVector& cli_formats, const ScanConfig& config);
 
+// Parses a --min-severity value ("low"/"medium"/"high"/"critical", any case)
+// into a SecurityLevel. Returns nullopt for an unrecognised value.
+std::optional<SecurityLevel> ParseSeverity(const String& text);
+// Process exit code derived from the highest finding severity, for CI/triage:
+// none/low=0 (informational), medium=10, high=20, critical=30.
+int SeverityExitCode(SecurityLevel level, bool any_findings);
+
 // Locates the config file. An explicit -c path is returned as-is (the caller
 // reports it if missing). Otherwise ./config.json is tried, then config.json
 // next to the executable -- an elevated shell starts in System32, so the

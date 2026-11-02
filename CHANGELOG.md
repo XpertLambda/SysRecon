@@ -4,6 +4,27 @@ All notable changes to SysRecon are documented here.
 
 ## [Unreleased]
 
+## [1.6.0] — 2026-11-02
+
+### Added — Tier 4 pen-tester workflow / output
+
+- **`--min-severity low|medium|high|critical`**: drops findings below the given
+  severity from the collected results and from every report format.
+- **`--exit-code`**: the process exit code reflects the highest finding severity
+  (none/low `0`, medium `10`, high `20`, critical `30`); a report-generation
+  failure is `2`. Off by default so existing/interactive behaviour is unchanged.
+- **SARIF 2.1.0 output** (`-f sarif`): one rule per finding type, ATT&CK
+  technique IDs as rule tags, `security-severity` for code-scanning dashboards.
+- **MITRE ATT&CK Navigator layer** (`-f navigator`): techniques parsed from each
+  finding's reference, coloured/scored by severity — drop straight into
+  Navigator.
+- **Risk score**: the previously-stubbed weighted 0-100 score and rating
+  (Minimal…Critical) are computed and shown in the JSON summary and the HTML
+  report.
+
+New portable, unit-tested helpers `ParseSeverity` and `SeverityExitCode`
+(105 tests total).
+
 ## [1.5.0] — 2026-11-02
 
 ### Added — Tier 2 credential & hardening-posture detections (`--privesc`)

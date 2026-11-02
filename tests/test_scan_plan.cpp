@@ -144,6 +144,25 @@ TEST(ResolveConfigPath, NothingFound) {
     EXPECT_EQ(ResolveConfigPath(L"", L"", none), L"");
 }
 
+// --- Severity parsing / exit codes ------------------------------------------
+
+TEST(Severity, ParseAcceptsKnownLevelsAnyCase) {
+    EXPECT_EQ(ParseSeverity(L"low"), SecurityLevel::Low);
+    EXPECT_EQ(ParseSeverity(L"Medium"), SecurityLevel::Medium);
+    EXPECT_EQ(ParseSeverity(L"HIGH"), SecurityLevel::High);
+    EXPECT_EQ(ParseSeverity(L"critical"), SecurityLevel::Critical);
+    EXPECT_FALSE(ParseSeverity(L"none").has_value());
+    EXPECT_FALSE(ParseSeverity(L"").has_value());
+}
+
+TEST(Severity, ExitCodeMapping) {
+    EXPECT_EQ(SeverityExitCode(SecurityLevel::Critical, false), 0);  // no findings -> 0
+    EXPECT_EQ(SeverityExitCode(SecurityLevel::Low, true), 0);
+    EXPECT_EQ(SeverityExitCode(SecurityLevel::Medium, true), 10);
+    EXPECT_EQ(SeverityExitCode(SecurityLevel::High, true), 20);
+    EXPECT_EQ(SeverityExitCode(SecurityLevel::Critical, true), 30);
+}
+
 // --- Path helpers -----------------------------------------------------------
 
 TEST(PathHelpers, AbsoluteDetection) {

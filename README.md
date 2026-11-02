@@ -610,6 +610,20 @@ Administrator enforcement is controlled by `general.require_admin` in
 `config.json` rather than a command-line flag. It is applied only when a
 configuration file is actually loaded.
 
+**Triage & pipeline options (Tier 4):**
+
+| Option | Effect |
+|--------|--------|
+| `--min-severity LEVEL` | Only report findings at or above `low`/`medium`/`high`/`critical` |
+| `--exit-code` | Process exit code reflects the highest finding severity: none/low `0`, medium `10`, high `20`, critical `30` (report-generation failure `2`) |
+| `-f sarif` | SARIF 2.1.0 output for code-scanning / CI ingestion |
+| `-f navigator` | MITRE ATT&CK Navigator layer (techniques coloured by severity) |
+
+```cmd
+REM Fail a pipeline when a High+ issue is present, SARIF for the dashboard
+sysrecon.exe --privesc --min-severity high --exit-code -f sarif -o .\out
+```
+
 > **Note:** SysRecon executes its modules sequentially and does not enforce
 > per-module timeouts. Earlier documentation described `--threads` and
 > `--timeout` options; no such options existed, and the corresponding

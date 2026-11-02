@@ -1,5 +1,7 @@
 #include "../../include/core/scan_plan.h"
 
+#include <cwctype>
+
 namespace SysRecon {
 namespace Core {
 
@@ -130,6 +132,27 @@ StringVector ResolveFormats(const StringVector& cli_formats, const ScanConfig& c
         formats = {L"json", L"csv", L"html"};  // Validation forbids this; stay safe anyway.
     }
     return formats;
+}
+
+std::optional<SecurityLevel> ParseSeverity(const String& text) {
+    String t;
+    for (wchar_t c : text) t.push_back(static_cast<wchar_t>(::towlower(c)));
+    if (t == L"low")      return SecurityLevel::Low;
+    if (t == L"medium")   return SecurityLevel::Medium;
+    if (t == L"high")     return SecurityLevel::High;
+    if (t == L"critical") return SecurityLevel::Critical;
+    return std::nullopt;
+}
+
+int SeverityExitCode(SecurityLevel level, bool any_findings) {
+    if (!any_findings) return 0;
+    switch (level) {
+        case SecurityLevel::Critical: return 30;
+        case SecurityLevel::High:     return 20;
+        case SecurityLevel::Medium:   return 10;
+        case SecurityLevel::Low:      return 0;
+    }
+    return 0;
 }
 
 String ResolveConfigPath(const String& cli_path, const String& exe_dir,

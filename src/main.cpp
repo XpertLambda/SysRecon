@@ -37,6 +37,10 @@ struct CommandLineOptions {
     bool memory_only = false;
     bool privesc_only = false;
     bool selective_scan = false;
+
+    // Tier-4 workflow options.
+    SysRecon::String min_severity;   // empty = include all (low+)
+    bool exit_code = false;          // process exit code reflects max finding severity
 };
 
 void PrintBanner() {
@@ -74,9 +78,15 @@ void PrintHelp() {
     std::wcout << L"                          then config.json next to sysrecon.exe\n";
     std::wcout << L"  -o, --output DIR        Set output directory (default: config's\n";
     std::wcout << L"                          output_directory, relative to the config file)\n";
-    std::wcout << L"  -f, --format FORMAT     Report format: json, csv, html, all\n";
+    std::wcout << L"  -f, --format FORMAT     Report format: json, csv, html, sarif, navigator, all\n";
     std::wcout << L"                          (default: config's generate_* settings)\n";
-    std::wcout << L"                          Can specify multiple: -f json -f csv\n";
+    std::wcout << L"                          Can specify multiple: -f json -f sarif\n";
+    std::wcout << L"                          sarif = SARIF 2.1.0; navigator = ATT&CK Navigator layer\n";
+    std::wcout << L"  --min-severity LEVEL    Only report findings at or above LEVEL\n";
+    std::wcout << L"                          (low | medium | high | critical)\n";
+    std::wcout << L"  --exit-code             Exit code reflects the highest finding severity\n";
+    std::wcout << L"                          (none/low=0, medium=10, high=20, critical=30;\n";
+    std::wcout << L"                          report-generation failure=2)\n";
     std::wcout << L"\n";
 
     std::wcout << L"MODULE SELECTION (replaces the config's module selection):\n";
@@ -431,10 +441,12 @@ bool ParseArguments(int argc, wchar_t* argv[], CommandLineOptions& options) {
                 
                 if (format == L"all") {
                     options.formats = {L"json", L"csv", L"html"};
-                } else if (format == L"json" || format == L"csv" || format == L"html") {
+                } else if (format == L"json" || format == L"csv" || format == L"html" ||
+                           format == L"sarif" || format == L"navigator") {
                     options.formats.push_back(format);  // Duplicates are dropped by ResolveFormats.
                 } else {
-                    std::wcerr << L"Error: Invalid format '" << format << L"'. Use json, csv, html, or all\n";
+                    std::wcerr << L"Error: Invalid format '" << format
+                               << L"'. Use json, csv, html, sarif, navigator, or all\n";
                     return false;
                 }
             } else {
@@ -443,7 +455,28 @@ bool ParseArguments(int argc, wchar_t* argv[], CommandLineOptions& options) {
             }
             continue;
         }
-        
+
+        if (arg == L"--min-severity") {
+            if (i + 1 < argc) {
+                String val = argv[++i];
+                if (!Core::ParseSeverity(val)) {
+                    std::wcerr << L"Error: Invalid severity '" << val
+                               << L"'. Use low, medium, high, or critical\n";
+                    return false;
+                }
+                options.min_severity = val;
+            } else {
+                std::wcerr << L"Error: --min-severity requires a level\n";
+                return false;
+            }
+            continue;
+        }
+
+        if (arg == L"--exit-code") {
+            options.exit_code = true;
+            continue;
+        }
+
         // Module selection
         if (arg == L"--accounts") {
             options.accounts_only = true;
@@ -601,6 +634,11 @@ int RunScan(CommandLineOptions& options) {
         engine.SetOutputDirectory(options.output_dir);
     }
     engine.SetStealthMode(stealth);
+    if (!options.min_severity.empty()) {
+        if (auto sev = Core::ParseSeverity(options.min_severity)) {
+            engine.SetMinSeverity(*sev);
+        }
+    }
 
     // 4. Construct and configure exactly the selected modules.
     if (!engine.Initialize()) {
@@ -727,11 +765,20 @@ int RunScan(CommandLineOptions& options) {
         std::wcout << L"\nScan complete! Review the reports for detailed findings.\n";
     }
 
+    // Severity-based exit code (opt-in via --exit-code) for CI/triage: derive
+    // it before Cleanup() clears the results. A report-generation failure is a
+    // distinct non-zero code (2) so scripts can tell the two apart.
+    int severity_exit = 0;
+    if (options.exit_code) {
+        severity_exit = Core::SeverityExitCode(engine.GetMaxSeverity(), !engine.GetResults().empty());
+    }
+
     engine.Cleanup();
     log.Info(L"SysRecon finished");
     log.CloseLogFile();
 
-    return (reports_failed > 0) ? 1 : 0;
+    if (reports_failed > 0) return 2;
+    return options.exit_code ? severity_exit : 0;
 }
 
 // Interactive menu mode

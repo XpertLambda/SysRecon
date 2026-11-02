@@ -128,6 +128,9 @@ bool ReportGenerator::GenerateJSON(const String& filename) {
         j["summary"]["medium"] = medium_count;
         j["summary"]["low"] = low_count;
         j["summary"]["total"] = scan_results_.size();
+        const int score = CalculateRiskScore();
+        j["summary"]["risk_score"] = score;
+        j["summary"]["rating"] = Core::Utils::WideToUtf8(RiskRating(score));
         
         // Wide path: narrowing to the ANSI codepage made any non-ASCII output
         // directory fail to open. std::filesystem::path preserves it.
@@ -280,8 +283,11 @@ bool ReportGenerator::GenerateHTML(const String& filename) {
     }
     
     // Summary
+    const int score = CalculateRiskScore();
     html << L"<h2>📊 Summary</h2>\n";
     html << L"<div class=\"info-box\">\n";
+    html << L"<p><strong>Overall risk rating:</strong> " << H(RiskRating(score))
+         << L" (score " << score << L"/100)</p>\n";
     html << L"<p><span class=\"risk-critical\">Critical:</span> " << critical << L"</p>\n";
     html << L"<p><span class=\"risk-high\">High:</span> " << high << L"</p>\n";
     html << L"<p><span class=\"risk-medium\">Medium:</span> " << medium << L"</p>\n";
@@ -343,6 +349,205 @@ bool ReportGenerator::GenerateHTML(const String& filename) {
     
     SYSRECON_LOG_INFO(L"HTML report generated successfully");
     return true;
+}
+
+int ReportGenerator::CalculateRiskScore() const {
+    int critical = 0, high = 0, medium = 0, low = 0;
+    for (const auto& r : scan_results_) {
+        switch (r.risk_level) {
+            case SecurityLevel::Critical: ++critical; break;
+            case SecurityLevel::High:     ++high; break;
+            case SecurityLevel::Medium:   ++medium; break;
+            case SecurityLevel::Low:      ++low; break;
+        }
+    }
+    int score = critical * 25 + high * 10 + medium * 4 + low;
+    return score > 100 ? 100 : score;
+}
+
+String ReportGenerator::RiskRating(int score) const {
+    int critical = 0, high = 0, medium = 0;
+    for (const auto& r : scan_results_) {
+        if (r.risk_level == SecurityLevel::Critical) ++critical;
+        else if (r.risk_level == SecurityLevel::High) ++high;
+        else if (r.risk_level == SecurityLevel::Medium) ++medium;
+    }
+    if (critical > 0 || score >= 60) return L"Critical";
+    if (high > 0 || score >= 30)     return L"High";
+    if (medium > 0 || score >= 10)   return L"Moderate";
+    if (score > 0)                   return L"Low";
+    return L"Minimal";
+}
+
+namespace {
+// Extracts MITRE ATT&CK technique IDs (Txxxx or Txxxx.yyy) from a reference
+// string such as "MITRE ATT&CK T1548.002 (Bypass UAC)".
+SysRecon::StringVector ExtractTechniqueIds(const SysRecon::String& reference) {
+    SysRecon::StringVector ids;
+    size_t i = 0;
+    while (i < reference.size()) {
+        if (reference[i] == L'T' && i + 1 < reference.size() &&
+            reference[i + 1] >= L'0' && reference[i + 1] <= L'9') {
+            size_t j = i + 1;
+            while (j < reference.size() && reference[j] >= L'0' && reference[j] <= L'9') ++j;
+            if (j < reference.size() && reference[j] == L'.') {
+                size_t k = j + 1;
+                while (k < reference.size() && reference[k] >= L'0' && reference[k] <= L'9') ++k;
+                if (k > j + 1) j = k;
+            }
+            ids.push_back(reference.substr(i, j - i));
+            i = j;
+        } else {
+            ++i;
+        }
+    }
+    return ids;
+}
+}  // namespace
+
+bool ReportGenerator::GenerateSARIF(const String& filename) {
+    SYSRECON_LOG_INFO(L"Generating SARIF report...");
+    try {
+        json root;
+        root["version"] = "2.1.0";
+        root["$schema"] = "https://json.schemastore.org/sarif-2.1.0.json";
+
+        json run;
+        run["tool"]["driver"]["name"] = "SysRecon";
+        run["tool"]["driver"]["version"] = Core::Utils::WideToUtf8(SYSRECON_VERSION);
+        run["tool"]["driver"]["informationUri"] = "https://github.com/XpertLambda/SysRecon";
+
+        // One SARIF rule per distinct (module + item) finding type.
+        json rules = json::array();
+        json results = json::array();
+        std::map<std::string, size_t> rule_index;
+
+        auto sarif_level = [](SecurityLevel s) -> const char* {
+            // SARIF levels: error/warning/note. Critical+High -> error.
+            switch (s) {
+                case SecurityLevel::Critical:
+                case SecurityLevel::High:   return "error";
+                case SecurityLevel::Medium: return "warning";
+                default:                    return "note";
+            }
+        };
+        auto sec_name = [](SecurityLevel s) -> const char* {
+            switch (s) {
+                case SecurityLevel::Critical: return "Critical";
+                case SecurityLevel::High:     return "High";
+                case SecurityLevel::Medium:   return "Medium";
+                default:                      return "Low";
+            }
+        };
+
+        for (const auto& r : scan_results_) {
+            const std::string rule_id =
+                Core::Utils::WideToUtf8(r.module_name + L"/" + r.item_name);
+            auto it = rule_index.find(rule_id);
+            if (it == rule_index.end()) {
+                json rule;
+                rule["id"] = rule_id;
+                rule["name"] = Core::Utils::WideToUtf8(r.item_name);
+                rule["shortDescription"]["text"] = Core::Utils::WideToUtf8(r.item_name);
+                rule["fullDescription"]["text"] = Core::Utils::WideToUtf8(r.description);
+                if (!r.remediation.empty())
+                    rule["help"]["text"] = Core::Utils::WideToUtf8(r.remediation);
+                rule["properties"]["security-severity"] =
+                    (r.risk_level == SecurityLevel::Critical) ? "9.5" :
+                    (r.risk_level == SecurityLevel::High)     ? "8.0" :
+                    (r.risk_level == SecurityLevel::Medium)   ? "5.0" : "3.0";
+                json tags = json::array();
+                for (const auto& t : ExtractTechniqueIds(r.reference)) tags.push_back(Core::Utils::WideToUtf8(t));
+                if (!tags.empty()) rule["properties"]["tags"] = tags;
+                rule_index[rule_id] = rules.size();
+                rules.push_back(rule);
+            }
+
+            json res;
+            res["ruleId"] = rule_id;
+            res["level"] = sarif_level(r.risk_level);
+            std::string msg = Core::Utils::WideToUtf8(r.description);
+            if (!r.remediation.empty()) msg += "\nRemediation: " + Core::Utils::WideToUtf8(r.remediation);
+            if (!r.reference.empty())   msg += "\nReference: " + Core::Utils::WideToUtf8(r.reference);
+            res["message"]["text"] = msg;
+            res["properties"]["severity"] = sec_name(r.risk_level);
+            res["properties"]["module"] = Core::Utils::WideToUtf8(r.module_name);
+            // A synthetic logical location keeps SARIF viewers happy without a file path.
+            res["locations"] = json::array();
+            json loc;
+            loc["logicalLocations"] = json::array();
+            json ll; ll["fullyQualifiedName"] = Core::Utils::WideToUtf8(r.module_name + L": " + r.item_name);
+            loc["logicalLocations"].push_back(ll);
+            res["locations"].push_back(loc);
+            results.push_back(res);
+        }
+
+        run["tool"]["driver"]["rules"] = rules;
+        run["results"] = results;
+        root["runs"] = json::array({run});
+
+        std::ofstream file{std::filesystem::path(filename)};
+        if (!file.is_open()) { SYSRECON_LOG_ERROR(L"Failed to create SARIF file"); return false; }
+        file << root.dump(2);
+        SYSRECON_LOG_INFO(L"SARIF report generated successfully");
+        return true;
+    } catch (const std::exception& e) {
+        SYSRECON_LOG_ERROR(L"Failed to generate SARIF: " + Core::Utils::Utf8ToWide(e.what()));
+        return false;
+    }
+}
+
+bool ReportGenerator::GenerateAttackNavigatorLayer(const String& filename) {
+    SYSRECON_LOG_INFO(L"Generating ATT&CK Navigator layer...");
+    try {
+        // Highest severity seen per technique drives the heat colour.
+        std::map<std::string, SecurityLevel> tech;
+        for (const auto& r : scan_results_) {
+            for (const auto& id : ExtractTechniqueIds(r.reference)) {
+                const std::string t = Core::Utils::WideToUtf8(id);
+                auto it = tech.find(t);
+                if (it == tech.end() || r.risk_level > it->second) tech[t] = r.risk_level;
+            }
+        }
+
+        json layer;
+        layer["name"] = "SysRecon findings";
+        layer["versions"] = { {"layer", "4.5"}, {"navigator", "4.9.1"}, {"attack", "14"} };
+        layer["domain"] = "enterprise-attack";
+        layer["description"] =
+            "Techniques mapped from SysRecon privilege-escalation / posture findings.";
+        auto colour = [](SecurityLevel s) -> const char* {
+            switch (s) {
+                case SecurityLevel::Critical: return "#b30000";
+                case SecurityLevel::High:     return "#fd7e14";
+                case SecurityLevel::Medium:   return "#ffc107";
+                default:                      return "#28a745";
+            }
+        };
+        json techniques = json::array();
+        for (const auto& [id, sev] : tech) {
+            json t;
+            t["techniqueID"] = id;
+            t["score"] = (sev == SecurityLevel::Critical) ? 100 :
+                         (sev == SecurityLevel::High) ? 75 :
+                         (sev == SecurityLevel::Medium) ? 50 : 25;
+            t["color"] = colour(sev);
+            t["enabled"] = true;
+            techniques.push_back(t);
+        }
+        layer["techniques"] = techniques;
+        layer["gradient"] = {
+            {"colors", json::array({"#ffffff", "#ff6666"})}, {"minValue", 0}, {"maxValue", 100} };
+
+        std::ofstream file{std::filesystem::path(filename)};
+        if (!file.is_open()) { SYSRECON_LOG_ERROR(L"Failed to create Navigator file"); return false; }
+        file << layer.dump(2);
+        SYSRECON_LOG_INFO(L"ATT&CK Navigator layer generated successfully");
+        return true;
+    } catch (const std::exception& e) {
+        SYSRECON_LOG_ERROR(L"Failed to generate Navigator layer: " + Core::Utils::Utf8ToWide(e.what()));
+        return false;
+    }
 }
 
 bool ReportGenerator::GenerateAllFormats(const String& base_filename) {

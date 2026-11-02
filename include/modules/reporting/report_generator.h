@@ -66,6 +66,14 @@ public:
     bool GenerateJSON(const String& filename);
     bool GenerateCSV(const String& filename);
     bool GenerateHTML(const String& filename);
+    // Machine-readable outputs for pipelines / triage.
+    bool GenerateSARIF(const String& filename);              // SARIF 2.1.0
+    bool GenerateAttackNavigatorLayer(const String& filename); // MITRE ATT&CK Navigator layer
+
+    // Weighted 0-100 risk score (critical*25 + high*10 + medium*4 + low*1,
+    // capped) and its rating label. Shared by the summary of every format.
+    int CalculateRiskScore() const;
+    String RiskRating(int score) const;
 
 private:
     ReportConfig config_;
