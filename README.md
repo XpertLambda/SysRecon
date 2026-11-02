@@ -134,6 +134,18 @@ Writable binaries flagged by the service, autorun, scheduled-task and
 autostart checks are annotated with their **Authenticode signature status**
 (signed / unsigned / untrusted, with signer) and **SHA-256**.
 
+**Credential & hardening posture** (presence/configuration only — SysRecon never
+reads a secret value):
+
+- Credential exposure: WDigest `UseLogonCredential`, LSASS `RunAsPPL`,
+  Credential Guard, and presence of PowerShell history, `.aws`/`.azure`/`.kube`
+  and Credential Manager/DPAPI stores (T1003 / T1552 / T1555)
+- Defender posture: disabled-by-policy, **scan exclusions** (paths/processes/
+  extensions) and Tamper Protection state (T1562.001)
+- Hardening baseline (CIS-aligned, paired with the companion hardening script):
+  SMBv1, SMB signing, LLMNR, LM/NTLMv1, PowerShell Script Block logging, LAPS
+  presence (T1557.001 / T1078.003)
+
 > SysRecon never exploits a finding or extracts a secret: credential checks
 > report presence and location only.
 

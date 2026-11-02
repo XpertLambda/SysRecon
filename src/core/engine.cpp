@@ -109,6 +109,8 @@ void ScanEngine::ApplyConfigToModules() {
         privesc_analyzer_->SetCheckTokens(cfg.privesc.check_tokens);
         privesc_analyzer_->SetCheckScheduledTasks(cfg.privesc.check_scheduled_tasks);
         privesc_analyzer_->SetCheckPatches(cfg.privesc.check_patches);
+        privesc_analyzer_->SetCheckDefender(cfg.privesc.check_defender);
+        privesc_analyzer_->SetCheckHardening(cfg.privesc.check_hardening);
     }
 }
 

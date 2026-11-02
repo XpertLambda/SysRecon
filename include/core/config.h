@@ -67,6 +67,8 @@ struct ScanConfig {
         bool check_tokens = true;        // current-token integrity / dangerous privileges
         bool check_scheduled_tasks = true; // SYSTEM tasks with a writable binary
         bool check_patches = true;       // installed hotfixes vs known-LPE table
+        bool check_defender = true;      // Defender status, exclusions, ASR rules
+        bool check_hardening = true;     // SMB/LLMNR/NTLM/LAPS/PS-logging posture
     } privesc;
     
     // Output settings

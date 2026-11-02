@@ -43,7 +43,9 @@
             "verify_signatures": true,
             "check_tokens": true,
             "check_scheduled_tasks": true,
-            "check_patches": true
+            "check_patches": true,
+            "check_defender": true,
+            "check_hardening": true
         }
     },
     "output": {

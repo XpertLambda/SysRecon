@@ -42,6 +42,8 @@ public:
     void SetCheckTokens(bool enable)         { check_tokens_ = enable; }
     void SetCheckScheduledTasks(bool enable) { check_scheduled_tasks_ = enable; }
     void SetCheckPatches(bool enable)        { check_patches_ = enable; }
+    void SetCheckDefender(bool enable)       { check_defender_ = enable; }
+    void SetCheckHardening(bool enable)      { check_hardening_ = enable; }
 
     const std::vector<PrivEscFinding>& GetFindings() const { return findings_; }
     const ScanResults& GetScanResults() const { return scan_results_; }
@@ -61,6 +63,10 @@ public:
     bool CheckScheduledTasks();        // SYSTEM/highest tasks with a writable binary
     bool CheckExtendedAutoruns();      // Winlogon, AppInit_DLLs, IFEO, Startup folder
     bool CheckMissingPatches();        // installed hotfixes vs known-LPE table
+    // Phase 2 (Tier 2 credential + hardening posture) additions.
+    bool CheckCredentialExposure();    // WDigest/RunAsPPL/CredGuard + saved-cred artefacts (presence)
+    bool CheckDefenderPosture();       // Defender status, exclusions, ASR rules
+    bool CheckHardeningBaseline();     // SMB/LLMNR/NTLM/LAPS/PS-logging/BitLocker posture
 
 private:
     // Records a finding both in the typed list and as a generic ScanResult
@@ -86,6 +92,8 @@ private:
     bool check_tokens_ = true;
     bool check_scheduled_tasks_ = true;
     bool check_patches_ = true;
+    bool check_defender_ = true;
+    bool check_hardening_ = true;
 };
 
 } // namespace Modules

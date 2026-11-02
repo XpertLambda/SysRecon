@@ -4,6 +4,27 @@ All notable changes to SysRecon are documented here.
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-11-02
+
+### Added — Tier 2 credential & hardening-posture detections (`--privesc`)
+
+- **Credential exposure** (`check_credentials`, presence/paths only — no secret
+  value is ever read): WDigest `UseLogonCredential`, LSASS protection
+  (`RunAsPPL`), Credential Guard (`LsaCfgFlags`), and the presence of common
+  secret-bearing artefacts (PowerShell `ConsoleHost_history.txt`, `.aws`/
+  `.azure`/`.kube`, DPAPI/Credential Manager store).
+- **Defender posture** (`check_defender`): Defender disabled-by-policy, and the
+  **exclusion Paths/Processes/Extensions** and Tamper-Protection state read from
+  the Defender and policy registry keys. Exclusions are prime attacker intel and
+  are surfaced for review.
+- **Hardening baseline** (`check_hardening`): detection counterparts to
+  `hardening/Invoke-SysReconHardening.ps1` — SMBv1 server, SMB signing,
+  LLMNR, LM/NTLMv1 (`LmCompatibilityLevel`), PowerShell Script Block logging,
+  and LAPS presence. Each finding cites the matching CIS control, so the audit
+  flags exactly what the companion script remediates.
+
+New `modules.privesc.*` config flags: `check_defender`, `check_hardening`.
+
 ## [1.4.0] — 2026-11-01
 
 ### Added — Tier 1 local-privilege-escalation checks (`--privesc`)

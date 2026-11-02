@@ -79,6 +79,15 @@ bool PrivEscAnalyzer::RunAllChecks() {
     if (check_patches_) {
         CheckMissingPatches();
     }
+    if (check_credentials_) {
+        CheckCredentialExposure();
+    }
+    if (check_defender_) {
+        CheckDefenderPosture();
+    }
+    if (check_hardening_) {
+        CheckHardeningBaseline();
+    }
 
     SYSRECON_LOG_INFO(L"Privilege-escalation assessment complete: " +
                       std::to_wstring(findings_.size()) + L" finding(s)");
@@ -840,6 +849,257 @@ bool PrivEscAnalyzer::CheckMissingPatches() {
     return true;
 }
 
+bool PrivEscAnalyzer::CheckCredentialExposure() {
+    // All checks are presence/configuration only - no secret value is read.
+    const wchar_t* lsa = L"SYSTEM\\CurrentControlSet\\Control\\Lsa";
+
+    // WDigest caches cleartext credentials in LSASS when UseLogonCredential=1.
+    auto wdigest = Core::Utils::TryReadRegistryDword(HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Control\\SecurityProviders\\WDigest", L"UseLogonCredential");
+    if (wdigest && *wdigest == 1) {
+        PrivEscFinding f;
+        f.category = L"Credentials"; f.title = L"WDigest cleartext credential caching enabled";
+        f.risk_level = SecurityLevel::High;
+        f.description = L"UseLogonCredential=1 makes WDigest keep plaintext passwords in LSASS "
+            L"memory, recoverable by anyone who can read LSASS.";
+        f.evidence = L"HKLM\\...\\SecurityProviders\\WDigest\\UseLogonCredential=1";
+        f.remediation = L"Set UseLogonCredential=0 (default on supported Windows) and reboot.";
+        f.reference = L"MITRE ATT&CK T1003.001 / T1112";
+        Record(f);
+    }
+
+    // LSASS protection (RunAsPPL) raises the bar for credential dumping.
+    auto runasppl = Core::Utils::TryReadRegistryDword(HKEY_LOCAL_MACHINE, lsa, L"RunAsPPL");
+    if (!runasppl || *runasppl == 0) {
+        PrivEscFinding f;
+        f.category = L"Credentials"; f.title = L"LSASS not running as a protected process (RunAsPPL)";
+        f.risk_level = SecurityLevel::Medium;
+        f.description = L"RunAsPPL is not enabled, so LSASS is not protected as a PPL and its "
+            L"memory is easier to read for credential theft.";
+        f.evidence = String(L"HKLM\\") + lsa + L"\\RunAsPPL=" + (runasppl ? L"0" : L"(absent)");
+        f.remediation = L"Enable LSA protection: set RunAsPPL=1 (and RunAsPPLBoot where supported) "
+            L"after confirming driver/AV compatibility; deploy Credential Guard where possible.";
+        f.reference = L"MITRE ATT&CK T1003.001";
+        Record(f);
+    }
+
+    // Credential Guard (LsaCfgFlags: 1=with UEFI lock, 2=without).
+    auto credguard = Core::Utils::TryReadRegistryDword(HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Control\\LSA", L"LsaCfgFlags");
+    if (!credguard || *credguard == 0) {
+        PrivEscFinding f;
+        f.category = L"Credentials"; f.title = L"Credential Guard not configured";
+        f.risk_level = SecurityLevel::Low;
+        f.description = L"Windows Defender Credential Guard is not enabled, so domain "
+            L"credentials/secrets are not isolated in a VBS container.";
+        f.evidence = L"HKLM\\...\\LSA\\LsaCfgFlags=" + String(credguard ? L"0" : L"(absent)");
+        f.remediation = L"Where hardware supports VBS, enable Credential Guard via Group Policy "
+            L"(Device Guard > Credential Guard) to isolate LSA secrets.";
+        f.reference = L"Microsoft Credential Guard";
+        Record(f);
+    }
+
+    // Artefacts that frequently hold recoverable secrets (presence only).
+    String userprofile;
+    {
+        DWORD n = GetEnvironmentVariableW(L"USERPROFILE", nullptr, 0);
+        if (n) { std::vector<wchar_t> b(n); if (GetEnvironmentVariableW(L"USERPROFILE", b.data(), n)) userprofile.assign(b.data()); }
+    }
+    if (!userprofile.empty()) {
+        struct Art { String path; const wchar_t* what; const wchar_t* ref; };
+        const Art arts[] = {
+            { userprofile + L"\\AppData\\Roaming\\Microsoft\\Windows\\PowerShell\\PSReadline\\ConsoleHost_history.txt",
+              L"PowerShell console history (often contains passwords in command lines)", L"MITRE ATT&CK T1552.003" },
+            { userprofile + L"\\.aws\\credentials", L"AWS credentials file", L"MITRE ATT&CK T1552.001" },
+            { userprofile + L"\\.azure\\accessTokens.json", L"Azure CLI token cache", L"MITRE ATT&CK T1552.001" },
+            { userprofile + L"\\.kube\\config", L"Kubernetes kubeconfig (cluster credentials)", L"MITRE ATT&CK T1552.001" },
+            { userprofile + L"\\AppData\\Roaming\\Microsoft\\Credentials", L"DPAPI-protected Credential Manager store", L"MITRE ATT&CK T1555.004" },
+        };
+        for (const auto& a : arts) {
+            bool exists = Core::Utils::FileExists(a.path) || Core::Utils::DirectoryExists(a.path);
+            if (!exists) continue;
+            PrivEscFinding f;
+            f.category = L"Credentials"; f.title = L"Credential artefact present";
+            f.risk_level = SecurityLevel::Low;
+            f.description = String(L"A file/location that commonly stores recoverable secrets is present: ") + a.what +
+                L". SysRecon reports its presence only and does not read the contents.";
+            f.evidence = L"Path=" + a.path;
+            f.remediation = L"Review whether the stored secrets are necessary; remove or protect "
+                L"them and rotate any exposed credentials.";
+            f.reference = a.ref;
+            Record(f);
+        }
+    }
+    return true;
+}
+
+bool PrivEscAnalyzer::CheckDefenderPosture() {
+    const wchar_t* polDef = L"SOFTWARE\\Policies\\Microsoft\\Windows Defender";
+
+    // Defender disabled entirely (policy).
+    auto disabled = Core::Utils::TryReadRegistryDword(HKEY_LOCAL_MACHINE, polDef, L"DisableAntiSpyware");
+    if (disabled && *disabled == 1) {
+        PrivEscFinding f;
+        f.category = L"Defender"; f.title = L"Microsoft Defender disabled by policy";
+        f.risk_level = SecurityLevel::High;
+        f.description = L"DisableAntiSpyware=1 turns Defender off, removing a primary detection control.";
+        f.evidence = String(L"HKLM\\") + polDef + L"\\DisableAntiSpyware=1";
+        f.remediation = L"Remove the DisableAntiSpyware policy value (or set 0) and confirm Defender "
+            L"real-time protection is running.";
+        f.reference = L"MITRE ATT&CK T1562.001 (Disable or Modify Tools)";
+        Record(f);
+    }
+
+    // Exclusions: prime attacker intel (and, for defenders, often over-broad).
+    struct ExKind { const wchar_t* sub; const wchar_t* label; };
+    const ExKind kinds[] = {
+        { L"Paths", L"path" }, { L"Processes", L"process" }, { L"Extensions", L"extension" } };
+    for (const wchar_t* root_key : {
+            L"SOFTWARE\\Microsoft\\Windows Defender\\Exclusions",
+            L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Exclusions" }) {
+        for (const auto& k : kinds) {
+            String key = String(root_key) + L"\\" + k.sub;
+            StringVector vals = Core::Utils::EnumerateRegistryValues(HKEY_LOCAL_MACHINE, key);
+            if (vals.empty()) continue;
+            PrivEscFinding f;
+            f.category = L"Defender"; f.title = String(L"Defender ") + k.label + L" exclusions configured";
+            f.risk_level = SecurityLevel::Medium;
+            f.description = L"Defender has " + std::to_wstring(vals.size()) + L" " + k.label +
+                L" exclusion(s). Excluded locations are not scanned, so they are ideal staging "
+                L"spots for tooling - valuable to an attacker and worth reviewing for over-breadth.";
+            String joined = Core::Utils::Join(vals, L", ");
+            if (joined.size() > 400) joined = joined.substr(0, 400) + L"...";
+            f.evidence = key + L" -> " + joined;
+            f.remediation = L"Review each exclusion; remove broad or user-writable paths. Exclusions "
+                L"should be specific and justified.";
+            f.reference = L"MITRE ATT&CK T1562.001";
+            Record(f);
+        }
+    }
+
+    // Tamper Protection state (informational; often unreadable without SYSTEM).
+    auto tamper = Core::Utils::TryReadRegistryDword(HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Microsoft\\Windows Defender\\Features", L"TamperProtection");
+    if (tamper && *tamper != 5) {
+        PrivEscFinding f;
+        f.category = L"Defender"; f.title = L"Defender Tamper Protection not enabled";
+        f.risk_level = SecurityLevel::Low;
+        f.description = L"Tamper Protection does not appear enabled (value != 5); Defender settings "
+            L"are easier to disable by an attacker with local admin.";
+        f.evidence = L"HKLM\\...\\Windows Defender\\Features\\TamperProtection=" + std::to_wstring(*tamper);
+        f.remediation = L"Enable Tamper Protection (Windows Security > Virus & threat protection "
+            L"settings), ideally enforced via Intune.";
+        f.reference = L"MITRE ATT&CK T1562.001";
+        Record(f);
+    }
+    return true;
+}
+
+bool PrivEscAnalyzer::CheckHardeningBaseline() {
+    // Each check mirrors a control applied by hardening/Invoke-SysReconHardening.ps1,
+    // so the audit flags exactly what the companion script remediates.
+    auto dword = [](HKEY root, const wchar_t* key, const wchar_t* val) {
+        return Core::Utils::TryReadRegistryDword(root, key, val);
+    };
+
+    // SMBv1 server still enabled.
+    auto smb1 = dword(HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Services\\LanmanServer\\Parameters", L"SMB1");
+    if (!smb1 || *smb1 != 0) {
+        PrivEscFinding f;
+        f.category = L"Hardening"; f.title = L"SMBv1 server not disabled";
+        f.risk_level = SecurityLevel::Medium;
+        f.description = L"The SMB1 value is not 0; the legacy SMBv1 protocol may be enabled, exposing "
+            L"the host to well-known SMBv1 attacks.";
+        f.evidence = L"LanmanServer\\Parameters\\SMB1=" + String(smb1 ? std::to_wstring(*smb1) : L"(absent)");
+        f.remediation = L"Disable SMBv1 (set SMB1=0 / remove the SMB1 feature). CIS 18.3.1. The "
+            L"companion hardening script applies this.";
+        f.reference = L"CIS 18.3.1";
+        Record(f);
+    }
+
+    // SMB server signing not required.
+    auto smbsign = dword(HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Services\\LanmanServer\\Parameters", L"RequireSecuritySignature");
+    if (!smbsign || *smbsign != 1) {
+        PrivEscFinding f;
+        f.category = L"Hardening"; f.title = L"SMB signing not required (server)";
+        f.risk_level = SecurityLevel::Medium;
+        f.description = L"RequireSecuritySignature!=1: the SMB server does not require signing, "
+            L"enabling SMB relay / man-in-the-middle.";
+        f.evidence = L"LanmanServer\\Parameters\\RequireSecuritySignature=" +
+                     String(smbsign ? std::to_wstring(*smbsign) : L"(absent)");
+        f.remediation = L"Require SMB signing (RequireSecuritySignature=1). CIS 2.3.9.x.";
+        f.reference = L"CIS 2.3.9 / MITRE ATT&CK T1557.001";
+        Record(f);
+    }
+
+    // LLMNR still enabled (poisoning / relay).
+    auto llmnr = dword(HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Policies\\Microsoft\\Windows NT\\DNSClient", L"EnableMulticast");
+    if (!llmnr || *llmnr != 0) {
+        PrivEscFinding f;
+        f.category = L"Hardening"; f.title = L"LLMNR not disabled";
+        f.risk_level = SecurityLevel::Medium;
+        f.description = L"EnableMulticast!=0: LLMNR is active, which Responder-style tools abuse to "
+            L"poison name resolution and capture NetNTLM hashes.";
+        f.evidence = L"DNSClient\\EnableMulticast=" + String(llmnr ? std::to_wstring(*llmnr) : L"(absent)");
+        f.remediation = L"Disable LLMNR (EnableMulticast=0) via GPO. CIS 18.5.4.2.";
+        f.reference = L"CIS 18.5.4.2 / MITRE ATT&CK T1557.001";
+        Record(f);
+    }
+
+    // LM/NTLMv1 permitted.
+    auto lmcompat = dword(HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Control\\Lsa", L"LmCompatibilityLevel");
+    if (!lmcompat || *lmcompat < 5) {
+        PrivEscFinding f;
+        f.category = L"Hardening"; f.title = L"Weak LAN Manager authentication level";
+        f.risk_level = SecurityLevel::Medium;
+        f.description = L"LmCompatibilityLevel<5 allows LM/NTLMv1 responses, which are trivially "
+            L"crackable/relayable.";
+        f.evidence = L"Lsa\\LmCompatibilityLevel=" + String(lmcompat ? std::to_wstring(*lmcompat) : L"(absent)");
+        f.remediation = L"Set LmCompatibilityLevel=5 (send NTLMv2 only, refuse LM & NTLM). CIS 2.3.11.7.";
+        f.reference = L"CIS 2.3.11.7";
+        Record(f);
+    }
+
+    // PowerShell Script Block logging disabled.
+    auto pslog = dword(HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\ScriptBlockLogging",
+        L"EnableScriptBlockLogging");
+    if (!pslog || *pslog != 1) {
+        PrivEscFinding f;
+        f.category = L"Hardening"; f.title = L"PowerShell Script Block logging disabled";
+        f.risk_level = SecurityLevel::Low;
+        f.description = L"Script Block logging is not enabled, reducing visibility of malicious "
+            L"PowerShell for defenders and incident response.";
+        f.evidence = L"ScriptBlockLogging\\EnableScriptBlockLogging=" +
+                     String(pslog ? std::to_wstring(*pslog) : L"(absent)");
+        f.remediation = L"Enable Script Block logging (EnableScriptBlockLogging=1) via GPO.";
+        f.reference = L"MITRE ATT&CK T1059.001 (defensive logging)";
+        Record(f);
+    }
+
+    // LAPS presence (managed local-admin password rotation).
+    bool laps = Core::Utils::RegistryKeyExists(HKEY_LOCAL_MACHINE,
+                    L"SOFTWARE\\Policies\\Microsoft Services\\AdmPwd") ||
+                Core::Utils::FileExists(L"C:\\Program Files\\LAPS\\CSE\\AdmPwd.dll");
+    if (!laps) {
+        PrivEscFinding f;
+        f.category = L"Hardening"; f.title = L"LAPS not detected";
+        f.risk_level = SecurityLevel::Low;
+        f.description = L"No sign of LAPS / Windows LAPS. Without managed, unique local-admin "
+            L"passwords, a single recovered local-admin hash enables lateral movement across hosts.";
+        f.evidence = L"No AdmPwd policy key or CSE present";
+        f.remediation = L"Deploy Windows LAPS to randomise and rotate the local Administrator "
+            L"password per machine.";
+        f.reference = L"MITRE ATT&CK T1078.003 (mitigation)";
+        Record(f);
+    }
+    return true;
+}
+
 #else  // non-Windows stubs (cross-compilation / native build sanity only)
 
 bool PrivEscAnalyzer::CheckUnquotedServicePaths()     { return true; }
@@ -855,6 +1115,9 @@ bool PrivEscAnalyzer::CheckTokenPrivileges()           { return true; }
 bool PrivEscAnalyzer::CheckScheduledTasks()            { return true; }
 bool PrivEscAnalyzer::CheckExtendedAutoruns()          { return true; }
 bool PrivEscAnalyzer::CheckMissingPatches()            { return true; }
+bool PrivEscAnalyzer::CheckCredentialExposure()        { return true; }
+bool PrivEscAnalyzer::CheckDefenderPosture()           { return true; }
+bool PrivEscAnalyzer::CheckHardeningBaseline()         { return true; }
 
 #endif
 
