@@ -3,7 +3,7 @@
 [![Version](https://img.shields.io/badge/version-1.8.0-blue.svg)](https://github.com/XpertLambda/SysRecon/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010/11%20|%20Server%202016+-blue.svg)](https://github.com/XpertLambda/SysRecon)
 [![Language](https://img.shields.io/badge/language-C++20-orange.svg)](https://github.com/XpertLambda/SysRecon)
-[![License](https://img.shields.io/badge/license-Commercial-red.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Build](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/XpertLambda/SysRecon)
 
 **Professional-grade security auditing and reconnaissance solution for Windows environments**
@@ -1321,9 +1321,9 @@ Each assessment capability is encapsulated in an independent module with well-de
 
 ## Support & Licensing
 
-### Commercial Licensing
+### Licensing
 
-SysRecon is commercial software. For licensing inquiries, enterprise support, or custom development:
+SysRecon is open source software released under the [MIT License](LICENSE). For enterprise support or custom development:
 
 **Contact**: XpertLambda  
 **Email**: [Contact through repository]  
@@ -1345,9 +1345,7 @@ SysRecon is commercial software. For licensing inquiries, enterprise support, or
 
 ### Legal Notice
 
-**Copyright © 2025 XpertLambda. All Rights Reserved.**
-
-This software is proprietary and confidential. Unauthorized copying, modification, distribution, or use of this software, via any medium, is strictly prohibited without express written permission from the copyright holder.
+**Copyright © 2025 Xpert.** Released under the [MIT License](LICENSE).
 
 ### Responsible Use Policy
 
@@ -1768,5 +1766,5 @@ SysRecon is built with security in mind:
   <strong>SysRecon - Professional Windows Security Assessment Platform</strong><br>
   <sub>Version 1.8.0 | Platform: Windows 10/11, Server 2016+</sub><br><br>
   <sub>Engineered for security professionals. Built for enterprise environments.</sub><br><br>
-  <sub>Copyright © 2025 XpertLambda. All Rights Reserved.</sub>
+  <sub>Copyright © 2025 Xpert. MIT License.</sub>
 </p>
