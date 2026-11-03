@@ -214,3 +214,6 @@ Doxyfile.bak
 
 # repo-doctor review artifact (local only, never commit)
 REPO_DOCTOR_REPORT.md
+
+# Local agent/session notes
+HANDOFF.md
