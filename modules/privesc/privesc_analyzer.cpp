@@ -36,6 +36,14 @@ void PrivEscAnalyzer::Record(const PrivEscFinding& finding) {
     result.risk_level = finding.risk_level;
     result.remediation = finding.remediation;
     result.reference = finding.reference;
+    result.instance_key = finding.instance_key;
+    result.confidence = finding.confidence;
+    result.fact_key = finding.fact_key;
+    if (!finding.instance_key.empty()) {
+        // The title of an instanced rule is the rule's name; the instance goes
+        // in the key (and in the evidence), not in the ID.
+        result.check_id = finding.title;
+    }
     result.timestamp = std::chrono::system_clock::now();
 
     // remediation/reference are first-class ScanResult fields (rendered
@@ -520,6 +528,7 @@ bool PrivEscAnalyzer::CheckUacPosture() {
         PrivEscFinding f;
         f.category = L"Registry";
         f.title = L"UAC disabled (EnableLUA=0)";
+        f.fact_key = L"uac-disabled";
         f.risk_level = SecurityLevel::High;
         f.description = L"User Account Control is turned off. Administrative tokens "
             L"are not split, so any code run by an admin user executes fully elevated "
@@ -830,23 +839,28 @@ bool PrivEscAnalyzer::CheckExtendedAutoruns() {
 
 bool PrivEscAnalyzer::CheckMissingPatches() {
     std::set<String> kbs = Core::Utils::GetInstalledHotfixes();
-    uint32_t build = Core::Utils::GetOsBuildNumber();
-    StringVector hints = Core::Utils::MissingLpePatchHints(build, kbs);
+    const uint32_t build = Core::Utils::GetOsBuildNumber();
+    const uint32_t ubr = Core::Utils::GetOsUbr();
+    const bool is_dc = Core::Utils::GetOsClassification().family == Core::Utils::OsFamily::DomainController;
+    const auto hints = Core::Utils::MissingLpePatchHints(build, kbs, is_dc);
     if (hints.empty()) return true;
 
     for (const auto& hint : hints) {
         PrivEscFinding f;
         f.category = L"Patch";
         f.title = L"Potential missing LPE patch";
-        f.risk_level = SecurityLevel::Medium;  // candidate; cumulative updates may supersede
+        f.instance_key = hint.cve;               // One finding per CVE, each with its own ID.
+        f.confidence = Confidence::Low;          // A KB-list heuristic, not proof.
+        f.risk_level = SecurityLevel::Medium;    // Candidate; cumulative updates may supersede.
         f.description = L"A well-known local-privilege-escalation issue has no fixing hotfix among "
             L"the installed KBs. Cumulative updates can supersede the listed KBs, so confirm the "
             L"effective patch level before relying on this.";
-        f.evidence = hint + L" | OSBuild=" + std::to_wstring(build) +
+        f.evidence = hint.message + L" | OSBuild=" + std::to_wstring(build) +
+                     (ubr ? L"." + std::to_wstring(ubr) : String()) +
                      L" | InstalledHotfixes=" + std::to_wstring(kbs.size());
         f.remediation = L"Verify the host's patch level (installed cumulative update) and apply "
             L"the latest security updates if the issue is genuinely unpatched.";
-        f.reference = L"MITRE ATT&CK T1068 (Exploitation for Privilege Escalation)";
+        f.reference = L"MITRE ATT&CK T1068 (Exploitation for Privilege Escalation) / " + hint.cve;
         Record(f);
     }
     return true;
@@ -909,20 +923,21 @@ bool PrivEscAnalyzer::CheckCredentialExposure() {
         if (n) { std::vector<wchar_t> b(n); if (GetEnvironmentVariableW(L"USERPROFILE", b.data(), n)) userprofile.assign(b.data()); }
     }
     if (!userprofile.empty()) {
-        struct Art { String path; const wchar_t* what; const wchar_t* ref; };
+        struct Art { String path; const wchar_t* what; const wchar_t* ref; const wchar_t* key; };
         const Art arts[] = {
             { userprofile + L"\\AppData\\Roaming\\Microsoft\\Windows\\PowerShell\\PSReadline\\ConsoleHost_history.txt",
-              L"PowerShell console history (often contains passwords in command lines)", L"MITRE ATT&CK T1552.003" },
-            { userprofile + L"\\.aws\\credentials", L"AWS credentials file", L"MITRE ATT&CK T1552.001" },
-            { userprofile + L"\\.azure\\accessTokens.json", L"Azure CLI token cache", L"MITRE ATT&CK T1552.001" },
-            { userprofile + L"\\.kube\\config", L"Kubernetes kubeconfig (cluster credentials)", L"MITRE ATT&CK T1552.001" },
-            { userprofile + L"\\AppData\\Roaming\\Microsoft\\Credentials", L"DPAPI-protected Credential Manager store", L"MITRE ATT&CK T1555.004" },
+              L"PowerShell console history (often contains passwords in command lines)", L"MITRE ATT&CK T1552.003", L"powershell-history" },
+            { userprofile + L"\\.aws\\credentials", L"AWS credentials file", L"MITRE ATT&CK T1552.001", L"aws-credentials" },
+            { userprofile + L"\\.azure\\accessTokens.json", L"Azure CLI token cache", L"MITRE ATT&CK T1552.001", L"azure-token-cache" },
+            { userprofile + L"\\.kube\\config", L"Kubernetes kubeconfig (cluster credentials)", L"MITRE ATT&CK T1552.001", L"kubeconfig" },
+            { userprofile + L"\\AppData\\Roaming\\Microsoft\\Credentials", L"DPAPI-protected Credential Manager store", L"MITRE ATT&CK T1555.004", L"dpapi-credential-store" },
         };
         for (const auto& a : arts) {
             bool exists = Core::Utils::FileExists(a.path) || Core::Utils::DirectoryExists(a.path);
             if (!exists) continue;
             PrivEscFinding f;
             f.category = L"Credentials"; f.title = L"Credential artefact present";
+            f.instance_key = a.key;   // Several artefacts, one rule: each gets its own ID.
             f.risk_level = SecurityLevel::Low;
             f.description = String(L"A file/location that commonly stores recoverable secrets is present: ") + a.what +
                 L". SysRecon reports its presence only and does not read the contents.";

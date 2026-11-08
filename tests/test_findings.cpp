@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <set>
+
 #include "core/findings.h"
 
 using namespace SysRecon;
@@ -24,8 +26,8 @@ TEST(Findings, SlugCollapsesSeparatorsAndLowercases) {
     EXPECT_EQ(Slug(L"  Writable directory on PATH: C:\\Tools\\ "), L"writable-directory-on-path-c-tools");
     EXPECT_EQ(Slug(L"TCP 445 (System)"), L"tcp-445-system");
     EXPECT_EQ(Slug(L"---"), L"");
-    // Non-ASCII letters are separators: IDs stay ASCII.
-    EXPECT_EQ(Slug(L"Benutzer \u00fcber"), L"benutzer-ber");
+    // Non-ASCII is encoded, never dropped (BUG-003).
+    EXPECT_EQ(Slug(L"Benutzer \u00fcber"), L"benutzer-u00fc-ber");
 }
 
 TEST(Findings, FindingIdDependsOnlyOnModuleAndItem) {
@@ -157,4 +159,126 @@ TEST(Findings, CompareAgainstEmptyBaselineMarksEverythingNew) {
     EXPECT_EQ(d.new_count, 2u);
     EXPECT_EQ(d.unchanged_count, 0u);
     EXPECT_TRUE(d.resolved.empty());
+}
+
+// ---- BUG-003: identity ---------------------------------------------------
+
+namespace {
+ScanResult Instance(const String& module, const String& check, const String& key,
+                    const String& item = L"") {
+    ScanResult r = Make(module, item.empty() ? check : item);
+    r.check_id = check;
+    r.instance_key = key;
+    return r;
+}
+}  // namespace
+
+TEST(Findings, InstanceKeyDistinguishesFindingsOfOneRule) {
+    const ScanResult a = Instance(L"Privilege Escalation", L"Potential missing LPE patch", L"CVE-2021-34527");
+    const ScanResult b = Instance(L"Privilege Escalation", L"Potential missing LPE patch", L"CVE-2020-1472");
+    EXPECT_EQ(FindingId(a), L"privilege-escalation/potential-missing-lpe-patch#cve-2021-34527");
+    EXPECT_NE(FindingId(a), FindingId(b));
+    EXPECT_EQ(CheckId(a), CheckId(b));
+    EXPECT_EQ(CheckId(a), L"privilege-escalation/potential-missing-lpe-patch");
+}
+
+TEST(Findings, IdIgnoresTheDisplayTitleWhenCheckIdIsSet) {
+    // The title can carry a hostname; the ID must not.
+    const ScanResult a = Instance(L"Event Logs", L"Account created", L"vagrant", L"Account created: WIN-AAAA\\vagrant");
+    const ScanResult b = Instance(L"Event Logs", L"Account created", L"vagrant", L"Account created: DESKTOP-BBBB\\vagrant");
+    EXPECT_EQ(FindingId(a), FindingId(b));
+    EXPECT_EQ(FindingId(a), L"event-logs/account-created#vagrant");
+}
+
+TEST(Findings, LegacyIdsAreUnchangedWithoutCheckIdOrInstance) {
+    EXPECT_EQ(FindingId(Make(L"Network", L"TCP 445 (System)")), L"network/tcp-445-system");
+}
+
+TEST(Findings, NonAsciiNamesAreEncodedNotCollapsed) {
+    EXPECT_EQ(Slug(L"用户"), L"u7528-u6237");
+    EXPECT_NE(Slug(L"用户"), Slug(L"éé"));
+    EXPECT_NE(FindingId(L"User Accounts", L"用户"), FindingId(L"User Accounts", L"使用"));
+    EXPECT_EQ(FindingId(L"User Accounts", L"用户"), L"user-accounts/u7528-u6237");
+    // Astral code point (UTF-16 surrogate pair on Windows, one wchar_t elsewhere) gives the same token.
+    String astral;
+    if (sizeof(wchar_t) == 2) { astral.push_back(0xD83D); astral.push_back(0xDE00); }
+    else astral.push_back(static_cast<wchar_t>(0x1F600));
+    EXPECT_EQ(Slug(astral), L"u1f600");
+}
+
+TEST(Findings, EnsureUniqueIdsRenamesOnlyTheRepeats) {
+    ScanResults r = {Make(L"A", L"same"), Make(L"A", L"same"), Make(L"A", L"other"), Make(L"A", L"same")};
+    EXPECT_EQ(EnsureUniqueIds(r), 2u);
+    std::set<String> ids;
+    for (const auto& x : r) ids.insert(FindingId(x));
+    EXPECT_EQ(ids.size(), r.size());
+    EXPECT_EQ(FindingId(r[0]), L"a/same");           // First occurrence keeps its ID.
+    EXPECT_EQ(FindingId(r[2]), L"a/other");
+    // Deterministic: running again changes nothing.
+    EXPECT_EQ(EnsureUniqueIds(r), 0u);
+}
+
+TEST(Findings, EnsureUniqueIdsKeepsInstanceKeysThatAreAlreadyUnique) {
+    ScanResults r = {Instance(L"P", L"Patch", L"CVE-1"), Instance(L"P", L"Patch", L"CVE-2")};
+    EXPECT_EQ(EnsureUniqueIds(r), 0u);
+}
+
+TEST(Findings, CompareMatchesA1x8BaselineThatKnewOnlyTheRule) {
+    // 1.8.0 reported six patch findings under one ID.
+    Baseline b;
+    for (int i = 0; i < 6; ++i) {
+        b.entries.push_back({L"privilege-escalation/potential-missing-lpe-patch", L"Privilege Escalation",
+                             L"Potential missing LPE patch", L"Medium"});
+    }
+    const ScanResults current = {
+        Instance(L"Privilege Escalation", L"Potential missing LPE patch", L"CVE-2021-34527"),
+        Instance(L"Privilege Escalation", L"Potential missing LPE patch", L"CVE-2020-1472"),
+    };
+    const BaselineDiff d = Compare(current, b);
+    EXPECT_EQ(d.new_count, 0u);
+    EXPECT_EQ(d.unchanged_count, 2u);
+    EXPECT_EQ(d.resolved.size(), 4u);   // The other four are no longer reported.
+}
+
+TEST(Findings, CompareDistinguishesInstancesOnceTheBaselineKnowsThem) {
+    Baseline b;
+    b.entries.push_back({L"privilege-escalation/potential-missing-lpe-patch#cve-1", L"Privilege Escalation",
+                         L"Potential missing LPE patch", L"Medium"});
+    const ScanResults current = {
+        Instance(L"Privilege Escalation", L"Potential missing LPE patch", L"CVE-2"),
+    };
+    const BaselineDiff d = Compare(current, b);
+    EXPECT_EQ(d.new_count, 1u);
+    EXPECT_EQ(d.resolved.size(), 1u);
+}
+
+// ---- BUG-006: one fact, one finding ---------------------------------------
+
+TEST(Findings, DropDuplicateFactsKeepsTheFindingWithRemediation) {
+    ScanResult registry = Make(L"Registry Policy", L"UAC Disabled");
+    registry.fact_key = L"uac-disabled";
+    ScanResult privesc = Make(L"Privilege Escalation", L"UAC disabled (EnableLUA=0)");
+    privesc.fact_key = L"uac-disabled";
+    privesc.remediation = L"Re-enable UAC";
+    ScanResults r = {Make(L"A", L"x"), registry, privesc, Make(L"B", L"y")};
+    EXPECT_EQ(DropDuplicateFacts(r), 1u);
+    ASSERT_EQ(r.size(), 3u);
+    EXPECT_EQ(r[0].item_name, L"x");
+    EXPECT_EQ(r[1].item_name, L"UAC disabled (EnableLUA=0)");   // the richer one, in the earlier slot
+    EXPECT_EQ(r[2].item_name, L"y");
+}
+
+TEST(Findings, DropDuplicateFactsKeepsTheFirstWhenBothAreEqual) {
+    ScanResult a = Make(L"M1", L"a"); a.fact_key = L"f";
+    ScanResult b = Make(L"M2", L"b"); b.fact_key = L"f";
+    ScanResults r = {a, b};
+    EXPECT_EQ(DropDuplicateFacts(r), 1u);
+    ASSERT_EQ(r.size(), 1u);
+    EXPECT_EQ(r[0].item_name, L"a");
+}
+
+TEST(Findings, DropDuplicateFactsNeverMergesFindingsWithoutAFactKey) {
+    ScanResults r = {Make(L"A", L"same"), Make(L"A", L"same")};
+    EXPECT_EQ(DropDuplicateFacts(r), 0u);
+    EXPECT_EQ(r.size(), 2u);
 }

@@ -206,6 +206,14 @@ can make — it never authenticates elsewhere or modifies the directory:
 - **Medium**: Security weaknesses requiring attention within planned maintenance windows
 - **Low**: Best practice deviations and informational findings
 
+**Overall rating and score.** The rating is the worst severity tier present, never
+a sum, and the 0-100 score stays inside that tier's band, so the two always
+agree: Critical 85-100, High 60-84, Moderate 30-59, Low 5-29, Minimal 0. Many
+Medium or Low findings can raise the score within their band but never turn the
+rating into High or Critical. A finding from a heuristic check (low confidence,
+for example "a KB for this old CVE is not in the hotfix list") counts one tier
+lower. The JSON report records the model under `summary.scoring`.
+
 #### Executive Intelligence
 
 - High-level security posture summaries
@@ -752,7 +760,8 @@ sysrecon.exe --privesc --min-severity high --exit-code -f sarif -o .\out
       }
     }
   ],
-  "summary": { "critical": 0, "high": 3, "medium": 9, "low": 25, "total": 37 },
+  "summary": { "critical": 0, "high": 3, "medium": 9, "low": 25, "total": 37,
+               "risk_score": 79, "rating": "High", "scoring": { "model_version": 2 } },
   "incomplete_checks": []
 }
 ```

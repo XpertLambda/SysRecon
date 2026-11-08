@@ -104,6 +104,42 @@ function Assert-ScanComplete($Report, [string]$Name) {
         Write-Annotation warning "$Name incomplete check: $note"
     }
     Assert-True ($Report.summary.total -eq @($Report.results).Count) "$Name summary total matches results"
+
+    # Finding IDs must be unique: baselines, --only/--skip and SARIF rule ids key on them.
+    $ids = @($Report.results | ForEach-Object { $_.id })
+    $dupes = @($ids | Group-Object | Where-Object Count -gt 1 | ForEach-Object Name)
+    Assert-True ($dupes.Count -eq 0) "$Name finding IDs are unique ($($dupes -join ', '))"
+
+    # The rating must agree with the findings. (1.8.0 printed "Critical, score 100"
+    # for a host with no Critical finding: thirty Medium findings summed past 100.)
+    $sum = $Report.summary
+    if ($sum.critical -eq 0) {
+        Assert-True ($sum.rating -ne 'Critical') "$Name rating is not Critical without a Critical finding ($($sum.rating), score $($sum.risk_score))"
+    }
+    if ($sum.critical -eq 0 -and $sum.high -eq 0) {
+        Assert-True ($sum.risk_score -le 59) "$Name score stays below the High band without Critical/High findings ($($sum.risk_score))"
+    }
+    Assert-True ($Report.summary.scoring.model_version -eq 2) "$Name reports scoring model v2"
+
+    # Unambiguous time, a schema version, and the host role.
+    Assert-True ($Report.scan_info.generated_utc -match '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$') "$Name has an ISO-8601 UTC time ($($Report.scan_info.generated_utc))"
+    Assert-True ($Report.scan_info.schema_version -ge 1) "$Name carries a schema_version"
+    $productType = (Get-CimInstance -ClassName Win32_OperatingSystem).ProductType
+    $expectedFamily = switch ($productType) { 1 { 'client' } 2 { 'domain_controller' } 3 { 'server' } default { 'unknown' } }
+    Assert-True ($Report.system_info.os_family -eq $expectedFamily) "$Name detected the host role ($($Report.system_info.os_family); expected $expectedFamily)"
+    if ($expectedFamily -ne 'client') {
+        Assert-True ($Report.system_info.os_name -like 'Windows Server*') "$Name does not label a server as a client ($($Report.system_info.os_name))"
+    }
+
+    # 2020-2022 "missing patch" hints must not appear on a build that shipped after those fixes.
+    if ([int]$Report.system_info.os_build -ge 22621) {
+        $patch = @($Report.results | Where-Object { $_.item -eq 'Potential missing LPE patch' })
+        Assert-True ($patch.Count -eq 0) "$Name has no stale missing-patch findings on build $($Report.system_info.os_build) ($($patch.Count))"
+    }
+
+    # UAC disabled is one fact: it must not be reported by two modules.
+    $uac = @($Report.results | Where-Object { $_.item -like 'UAC disabled*' -or $_.item -eq 'UAC Disabled' })
+    Assert-True ($uac.Count -le 1) "$Name reports UAC-disabled once ($($uac.Count))"
 }
 
 # ---------------------------------------------------------------------------

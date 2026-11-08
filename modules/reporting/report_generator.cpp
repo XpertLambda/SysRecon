@@ -64,7 +64,19 @@ bool ReportGenerator::GenerateJSON(const String& filename) {
         
         // Scan information
         j["scan_info"]["version"] = Core::Utils::WideToUtf8(SYSRECON_VERSION);
+        // "timestamp" is local time without a zone (kept: it is the report file
+        // name stamp and older tooling reads it). "generated_utc" and
+        // "utc_offset_minutes" are the unambiguous form.
         j["scan_info"]["timestamp"] = Core::Utils::WideToUtf8(Core::Utils::GetCurrentTimestamp());
+        {
+            const auto now = std::chrono::system_clock::now();
+            j["scan_info"]["generated_utc"] = Core::Utils::WideToUtf8(Core::Utils::FormatIso8601Utc(now));
+            j["scan_info"]["utc_offset_minutes"] = Core::Utils::LocalUtcOffsetMinutes(now);
+        }
+        // First versioned report format. Additive since 1.8.0: scoring model v2,
+        // finding IDs with an instance part, ISO-8601 times. Finding schema v2
+        // (typed evidence, mandatory remediation) will bump this to 2.
+        j["scan_info"]["schema_version"] = 1;
         j["scan_info"]["hostname"] = Core::Utils::WideToUtf8(Core::Utils::GetComputerName());
         j["scan_info"]["os_version"] = Core::Utils::WideToUtf8(Core::Utils::GetWindowsVersion());
         j["scan_info"]["current_user"] = Core::Utils::WideToUtf8(Core::Utils::GetCurrentUserName());
@@ -73,6 +85,12 @@ bool ReportGenerator::GenerateJSON(const String& filename) {
         // System information
         j["system_info"]["computer_name"] = Core::Utils::WideToUtf8(system_info_.computer_name);
         j["system_info"]["os_version"] = Core::Utils::WideToUtf8(system_info_.os_version);
+        // Host role: build numbers alone cannot tell Windows 11 from Windows
+        // Server 2025, and several checks depend on the difference.
+        j["system_info"]["os_name"] = Core::Utils::WideToUtf8(system_info_.os_name);
+        j["system_info"]["os_family"] = Core::Utils::WideToUtf8(system_info_.os_family);
+        j["system_info"]["os_build"] = Core::Utils::WideToUtf8(system_info_.os_build);
+        j["system_info"]["os_ubr"] = system_info_.os_ubr;
         j["system_info"]["architecture"] = Core::Utils::WideToUtf8(system_info_.architecture);
 
         j["scan_info"]["elevated"] = system_info_.elevated;
@@ -148,9 +166,18 @@ bool ReportGenerator::GenerateJSON(const String& filename) {
         j["summary"]["medium"] = medium_count;
         j["summary"]["low"] = low_count;
         j["summary"]["total"] = scan_results_.size();
-        const int score = CalculateRiskScore();
-        j["summary"]["risk_score"] = score;
-        j["summary"]["rating"] = Core::Utils::WideToUtf8(RiskRating(score));
+        const Core::Scoring::Result risk = RiskAssessment();
+        j["summary"]["risk_score"] = risk.score;
+        j["summary"]["rating"] = Core::Utils::WideToUtf8(risk.rating);
+        // Which model produced the score, so a consumer can tell 1.8 numbers
+        // (a linear sum that saturated at 100) from these (tier bands).
+        j["summary"]["scoring"] = {
+            {"model_version", Core::Scoring::kModelVersion},
+            {"rule", "rating is the worst effective severity tier present; the score stays inside that tier's band"},
+            {"tier_bands", {{"critical", {85, 100}}, {"high", {60, 84}}, {"medium", {30, 59}}, {"low", {5, 29}}}},
+            {"low_confidence_demotes_one_tier", true},
+            {"repeat_weight", Core::Scoring::kRepeatWeight}
+        };
         
         // Wide path: narrowing to the ANSI codepage made any non-ASCII output
         // directory fail to open. std::filesystem::path preserves it.
@@ -322,11 +349,11 @@ bool ReportGenerator::GenerateHTML(const String& filename) {
     }
     
     // Summary
-    const int score = CalculateRiskScore();
+    const Core::Scoring::Result risk = RiskAssessment();
     html << L"<h2>📊 Summary</h2>\n";
     html << L"<div class=\"info-box\">\n";
-    html << L"<p><strong>Overall risk rating:</strong> " << H(RiskRating(score))
-         << L" (score " << score << L"/100)</p>\n";
+    html << L"<p><strong>Overall risk rating:</strong> " << H(risk.rating)
+         << L" (score " << risk.score << L"/100)</p>\n";
     html << L"<p><span class=\"risk-critical\">Critical:</span> " << critical << L"</p>\n";
     html << L"<p><span class=\"risk-high\">High:</span> " << high << L"</p>\n";
     html << L"<p><span class=\"risk-medium\">Medium:</span> " << medium << L"</p>\n";
@@ -390,32 +417,8 @@ bool ReportGenerator::GenerateHTML(const String& filename) {
     return true;
 }
 
-int ReportGenerator::CalculateRiskScore() const {
-    int critical = 0, high = 0, medium = 0, low = 0;
-    for (const auto& r : scan_results_) {
-        switch (r.risk_level) {
-            case SecurityLevel::Critical: ++critical; break;
-            case SecurityLevel::High:     ++high; break;
-            case SecurityLevel::Medium:   ++medium; break;
-            case SecurityLevel::Low:      ++low; break;
-        }
-    }
-    int score = critical * 25 + high * 10 + medium * 4 + low;
-    return score > 100 ? 100 : score;
-}
-
-String ReportGenerator::RiskRating(int score) const {
-    int critical = 0, high = 0, medium = 0;
-    for (const auto& r : scan_results_) {
-        if (r.risk_level == SecurityLevel::Critical) ++critical;
-        else if (r.risk_level == SecurityLevel::High) ++high;
-        else if (r.risk_level == SecurityLevel::Medium) ++medium;
-    }
-    if (critical > 0 || score >= 60) return L"Critical";
-    if (high > 0 || score >= 30)     return L"High";
-    if (medium > 0 || score >= 10)   return L"Moderate";
-    if (score > 0)                   return L"Low";
-    return L"Minimal";
+Core::Scoring::Result ReportGenerator::RiskAssessment() const {
+    return Core::Scoring::Compute(scan_results_);
 }
 
 namespace {

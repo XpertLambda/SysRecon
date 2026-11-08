@@ -41,12 +41,42 @@ String ExtractExecutablePath(const String& image_path);
 String Sha256Hex(const ByteVector& data);
 String CalculateSHA256(const String& file_path);
 
+// What kind of Windows this is. Build numbers alone cannot tell client from
+// server (Windows Server 2025 and Windows 11 24H2 are both build 26100).
+enum class OsFamily { Unknown, Client, Server, DomainController };
+
+struct OsClassification {
+    OsFamily family = OsFamily::Unknown;
+    String name;   // "Windows 11", "Windows Server 2025", "Windows Server 2012 R2", ...
+};
+
+// Pure mapping from RtlGetVersion's fields to a family and a product name.
+// `product_type` is OSVERSIONINFOEX::wProductType: 1 workstation, 2 domain
+// controller, 3 server (0 = unknown, treated as a client). Unit-tested.
+OsClassification ClassifyWindows(uint32_t major, uint32_t minor, uint32_t build, uint32_t product_type);
+
+// One curated local-privilege-escalation issue whose fix looks to be missing.
+struct LpePatchHint {
+    String cve;        // "CVE-2021-34527"
+    String name;       // "PrintNightmare (Print Spooler RCE/LPE)"
+    String fix_kbs;    // "KB5004945, KB5004946, ..." for the evidence line
+    String message;    // "<cve> (<name>) - no fixing hotfix found (<kbs>)"
+};
+
 // Offline "is a known local-privilege-escalation patch missing?" lookup.
-// Given the OS build number and the set of installed hotfix IDs (e.g.
-// "KB5004945"), returns one human-readable hint per curated CVE whose fixing
-// KB is not present. Pure data + string logic, unit-tested. The Win32 side only
-// gathers the inputs (WMI Win32_QuickFixEngineering + the build number).
-StringVector MissingLpePatchHints(uint32_t os_build, const std::set<String>& installed_kbs);
+// Given the OS build number, the set of installed hotfix IDs (e.g.
+// "KB5004945") and whether the host is a domain controller, returns one hint
+// per curated CVE that (a) can affect this build, (b) applies to this role and
+// (c) whose fixing KB is not present. A CVE is only a candidate on the builds
+// that existed before its fix; later builds (Windows 11, Server 2022+, Windows
+// 10 21H2+ for the 2021 issues) shipped with it and are never reported, which
+// is what stops a current Windows 11 from getting 2020-2022 "missing patch"
+// findings. A hint is still a heuristic: cumulative updates supersede the
+// listed KBs. Pure data + logic, unit-tested; the Win32 side only gathers the
+// inputs (WMI Win32_QuickFixEngineering, RtlGetVersion, ProductType).
+std::vector<LpePatchHint> MissingLpePatchHints(uint32_t os_build,
+                                               const std::set<String>& installed_kbs,
+                                               bool is_domain_controller = false);
 
 bool FileExists(const String& path);
 bool DirectoryExists(const String& path);
@@ -71,6 +101,11 @@ String MacAddressToString(const uint8_t* mac);
 bool ToLocalTime(std::time_t t, std::tm& out);
 String FormatTimestamp(const std::chrono::system_clock::time_point& time, const String& format = L"%Y-%m-%d %H:%M:%S");
 String GetCurrentTimestamp();
+// "2026-11-08T16:54:37Z": unambiguous, sortable, for machine-readable output.
+// (GetCurrentTimestamp() is local time with no zone and is meant for file names.)
+String FormatIso8601Utc(const std::chrono::system_clock::time_point& time);
+// Offset of the local time zone from UTC at `time`, in minutes (e.g. -480).
+int LocalUtcOffsetMinutes(const std::chrono::system_clock::time_point& time);
 
 class Timer {
 public:
@@ -171,6 +206,11 @@ StringVector GetTokenGroupNames();           // resolved group account names
 // and the OS build number. Used together with MissingLpePatchHints().
 std::set<String> GetInstalledHotfixes();
 uint32_t GetOsBuildNumber();
+// Family and name from the live OS (RtlGetVersion incl. product type).
+OsClassification GetOsClassification();
+// Update Build Revision (the ".7019" in 26200.7019): which cumulative update
+// is installed. 0 when it cannot be read.
+uint32_t GetOsUbr();
 #endif
 
 }

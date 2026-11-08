@@ -18,11 +18,52 @@ wchar_t LowerAscii(wchar_t c) {
     return (c >= L'A' && c <= L'Z') ? static_cast<wchar_t>(c - L'A' + L'a') : c;
 }
 
+// Reads the next code point from `text` at `i` (advancing i), combining UTF-16
+// surrogate pairs so the result is the same wherever wchar_t is 16 or 32 bits.
+// A lone surrogate is returned as is.
+unsigned long NextCodePoint(const String& text, size_t& i) {
+    unsigned long cp = static_cast<unsigned long>(text[i]);
+    ++i;
+    if (cp >= 0xD800 && cp <= 0xDBFF && i < text.size()) {
+        const unsigned long lo = static_cast<unsigned long>(text[i]);
+        if (lo >= 0xDC00 && lo <= 0xDFFF) {
+            cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+            ++i;
+        }
+    }
+    return cp;
+}
+
+// "u" + lower-case hex, at least four digits.
+String CodePointToken(unsigned long cp) {
+    static const wchar_t* digits = L"0123456789abcdef";
+    String hex;
+    do {
+        hex.insert(hex.begin(), digits[cp & 0xF]);
+        cp >>= 4;
+    } while (cp);
+    while (hex.size() < 4) hex.insert(hex.begin(), L'0');
+    return L"u" + hex;
+}
+
+void AppendToken(String& out, bool& pending_dash, const String& token) {
+    if (!out.empty() && out.back() != L'/' && out.back() != L'*') {
+        out.push_back(L'-');
+    }
+    out += token;
+    pending_dash = true;   // Whatever follows starts a new token.
+}
+
 // Slug that keeps glob wildcards and '/', for patterns.
 String SlugPattern(const String& pattern) {
     String out;
     bool pending_dash = false;
-    for (wchar_t c : pattern) {
+    for (size_t i = 0; i < pattern.size();) {
+        if (static_cast<unsigned long>(pattern[i]) > 0x7F) {
+            AppendToken(out, pending_dash, CodePointToken(NextCodePoint(pattern, i)));
+            continue;
+        }
+        const wchar_t c = pattern[i++];
         if (IsAsciiAlnum(c)) {
             if (pending_dash && !out.empty() && out.back() != L'/' && out.back() != L'*') {
                 out.push_back(L'-');
@@ -49,7 +90,12 @@ String SlugPattern(const String& pattern) {
 String Slug(const String& text) {
     String out;
     bool pending_dash = false;
-    for (wchar_t c : text) {
+    for (size_t i = 0; i < text.size();) {
+        if (static_cast<unsigned long>(text[i]) > 0x7F) {
+            AppendToken(out, pending_dash, CodePointToken(NextCodePoint(text, i)));
+            continue;
+        }
+        const wchar_t c = text[i++];
         if (IsAsciiAlnum(c)) {
             if (pending_dash && !out.empty()) {
                 out.push_back(L'-');
@@ -71,8 +117,67 @@ String FindingId(const String& module_name, const String& item_name) {
     return module + L"/" + item;
 }
 
+String CheckId(const ScanResult& result) {
+    return FindingId(result.module_name,
+                     result.check_id.empty() ? result.item_name : result.check_id);
+}
+
 String FindingId(const ScanResult& result) {
-    return FindingId(result.module_name, result.item_name);
+    String id = CheckId(result);
+    const String instance = Slug(result.instance_key);
+    if (!instance.empty()) {
+        id += L"#" + instance;
+    }
+    return id;
+}
+
+size_t EnsureUniqueIds(ScanResults& results) {
+    std::unordered_map<String, size_t> seen;
+    size_t renamed = 0;
+    for (auto& r : results) {
+        const String id = FindingId(r);
+        const size_t n = ++seen[id];
+        if (n == 1) continue;
+        // Suffix until free: "dup2" could itself already exist as a real key.
+        for (size_t k = n;; ++k) {
+            ScanResult probe = r;
+            probe.instance_key = (r.instance_key.empty() ? String() : r.instance_key + L"-") +
+                                 L"dup" + std::to_wstring(k);
+            const String candidate = FindingId(probe);
+            if (seen.find(candidate) == seen.end()) {
+                r.instance_key = probe.instance_key;
+                ++seen[candidate];
+                ++renamed;
+                break;
+            }
+        }
+    }
+    return renamed;
+}
+
+size_t DropDuplicateFacts(ScanResults& results) {
+    // Index of the survivor of each fact.
+    std::unordered_map<String, size_t> keep;
+    for (size_t i = 0; i < results.size(); ++i) {
+        const String& key = results[i].fact_key;
+        if (key.empty()) continue;
+        auto it = keep.find(key);
+        if (it == keep.end()) {
+            keep.emplace(key, i);
+        } else if (results[it->second].remediation.empty() && !results[i].remediation.empty()) {
+            it->second = i;   // The richer finding replaces the earlier bare one.
+        }
+    }
+    ScanResults out;
+    out.reserve(results.size());
+    for (size_t i = 0; i < results.size(); ++i) {
+        const String& key = results[i].fact_key;
+        if (!key.empty() && keep[key] != i) continue;
+        out.push_back(std::move(results[i]));
+    }
+    const size_t dropped = results.size() - out.size();
+    results = std::move(out);
+    return dropped;
 }
 
 bool GlobMatch(const String& pattern, const String& text) {
@@ -186,7 +291,12 @@ BaselineDiff Compare(const ScanResults& current, const Baseline& baseline) {
     }
     diff.is_new.reserve(current.size());
     for (const auto& r : current) {
-        auto it = remaining.find(FindingId(r));
+        const String id = FindingId(r);
+        auto it = remaining.find(id);
+        if ((it == remaining.end() || it->second == 0) && id.find(L'#') != String::npos) {
+            // Reports before 1.9 knew only the rule, not its instance.
+            it = remaining.find(CheckId(r));
+        }
         if (it != remaining.end() && it->second > 0) {
             --it->second;
             diff.is_new.push_back(false);

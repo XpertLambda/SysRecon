@@ -473,6 +473,36 @@ String GetCurrentTimestamp() {
     return FormatTimestamp(std::chrono::system_clock::now(), L"%Y%m%d_%H%M%S");
 }
 
+namespace {
+bool ToUtcTime(std::time_t t, std::tm& out) {
+#ifdef _WIN32
+    return gmtime_s(&out, &t) == 0;
+#else
+    return gmtime_r(&t, &out) != nullptr;
+#endif
+}
+}  // namespace
+
+String FormatIso8601Utc(const std::chrono::system_clock::time_point& time) {
+    const std::time_t t = std::chrono::system_clock::to_time_t(time);
+    std::tm tm_buf{};
+    if (!ToUtcTime(t, tm_buf)) return L"";
+    std::wstringstream ss;
+    ss << std::put_time(&tm_buf, L"%Y-%m-%dT%H:%M:%SZ");
+    return ss.str();
+}
+
+int LocalUtcOffsetMinutes(const std::chrono::system_clock::time_point& time) {
+    const std::time_t t = std::chrono::system_clock::to_time_t(time);
+    std::tm local{}, utc{};
+    if (!ToLocalTime(t, local) || !ToUtcTime(t, utc)) return 0;
+    int minutes = (local.tm_hour * 60 + local.tm_min) - (utc.tm_hour * 60 + utc.tm_min);
+    // The two broken-down times can straddle midnight: fold into (-12h, +14h].
+    if (minutes > 14 * 60) minutes -= 24 * 60;
+    if (minutes <= -12 * 60) minutes += 24 * 60;
+    return minutes;
+}
+
 Timer::Timer() : is_running_(false) {
     Reset();
 }
@@ -578,38 +608,98 @@ String CalculateSHA256(const String& file_path) {
     return out;
 }
 
-StringVector MissingLpePatchHints(uint32_t os_build, const std::set<String>& installed_kbs) {
+OsClassification ClassifyWindows(uint32_t major, uint32_t minor, uint32_t build, uint32_t product_type) {
+    OsClassification c;
+    const bool is_dc = product_type == 2;
+    const bool is_server = product_type == 3 || is_dc;
+    c.family = is_dc ? OsFamily::DomainController : (is_server ? OsFamily::Server : OsFamily::Client);
+
+    if (major == 10) {
+        if (is_server) {
+            if (build >= 26100)      c.name = L"Windows Server 2025";
+            else if (build >= 25398) c.name = L"Windows Server, version 23H2";
+            else if (build >= 20348) c.name = L"Windows Server 2022";
+            else if (build >= 17763) c.name = L"Windows Server 2019";
+            else if (build >= 14393) c.name = L"Windows Server 2016";
+            else                     c.name = L"Windows Server (build " + std::to_wstring(build) + L")";
+        } else {
+            c.name = build >= 22000 ? L"Windows 11" : L"Windows 10";
+        }
+    } else if (major == 6) {
+        if (is_server) {
+            if (minor == 3)      c.name = L"Windows Server 2012 R2";
+            else if (minor == 2) c.name = L"Windows Server 2012";
+            else if (minor == 1) c.name = L"Windows Server 2008 R2";
+            else                 c.name = L"Windows Server 2008";
+        } else {
+            if (minor == 3)      c.name = L"Windows 8.1";
+            else if (minor == 2) c.name = L"Windows 8";
+            else if (minor == 1) c.name = L"Windows 7";
+            else                 c.name = L"Windows Vista";
+        }
+    } else if (major == 0) {
+        c.family = OsFamily::Unknown;
+        c.name = L"Windows";
+    } else {
+        c.name = L"Windows " + std::to_wstring(major) + L"." + std::to_wstring(minor);
+    }
+    return c;
+}
+
+std::vector<LpePatchHint> MissingLpePatchHints(uint32_t os_build, const std::set<String>& installed_kbs,
+                                               bool is_domain_controller) {
     // Curated, deliberately small table of high-signal local-privilege-escalation
-    // issues. Each entry's `fix_kbs` lists KBs that (among others) addressed it;
-    // if the host's build is in range and none of those KBs are installed, the
-    // CVE is reported as a candidate. This is a hint, not proof: cumulative
-    // updates supersede these KBs, so findings are marked "verify".
+    // issues. Each entry lists the builds that existed *before* the fix
+    // (affected) and KBs that (among others) addressed it. A CVE is a candidate
+    // only on an affected build, only for the right role, and only when none of
+    // the fix KBs is installed. This is a hint, not proof: cumulative updates
+    // supersede these KBs, so findings are marked low confidence ("verify").
+    struct Range { uint32_t from, to; };
     struct Entry {
         const wchar_t* cve;
         const wchar_t* name;
-        uint32_t min_build;        // inclusive; 0 = any
-        uint32_t max_build;        // inclusive; 0 = any
+        std::vector<Range> affected;   // inclusive build ranges; empty = any build
+        bool dc_only;                  // domain controllers only
         std::vector<String> fix_kbs;
     };
+    // Build numbers: 7601 Win7/2008R2, 9600 8.1/2012R2, 14393 Server 2016,
+    // 17134 Win10 1803, 17763 Win10 1809/Server 2019, 19041-19043 Win10
+    // 2004..21H1, 19044 21H2, 19045 22H2, 20348 Server 2022, 22000 Win11 21H2,
+    // 22621+ Win11 22H2 and later. Windows 11 and Windows 10 21H2+ were released
+    // after the July 2021 fixes; Windows 10 22H2 and Windows 11 22H2+ after the
+    // January 2022 fix.
     static const std::vector<Entry> table = {
-        { L"CVE-2021-34527", L"PrintNightmare (Print Spooler RCE/LPE)", 0, 0,
+        // July 2021 fixes. Builds up to Windows 10 21H1 (19043) pre-date them.
+        { L"CVE-2021-34527", L"PrintNightmare (Print Spooler RCE/LPE)", {{0, 19043}}, false,
           { L"KB5004945", L"KB5004946", L"KB5004947", L"KB5004948", L"KB5004950" } },
-        { L"CVE-2021-1675",  L"Print Spooler LPE",                      0, 0,
+        { L"CVE-2021-1675",  L"Print Spooler LPE", {{0, 19043}}, false,
           { L"KB5003635", L"KB5004945" } },
-        { L"CVE-2021-36934", L"HiveNightmare / SeriousSAM (SAM hive readable)", 0, 0,
+        // HiveNightmare: Windows 10 1809 through 21H1 (and Server 2019).
+        { L"CVE-2021-36934", L"HiveNightmare / SeriousSAM (SAM hive readable)", {{17763, 19043}}, false,
           { L"KB5004605", L"KB5004237" } },
-        { L"CVE-2021-1732",  L"Win32k window-object LPE",               0, 0,
+        // February 2021 fix: Windows 10 1803 through 20H2 (19042).
+        { L"CVE-2021-1732",  L"Win32k window-object LPE", {{17134, 19042}}, false,
           { L"KB4601319", L"KB4601315" } },
-        { L"CVE-2022-21882", L"Win32k LPE (CVE-2021-1732 bypass)",      0, 0,
+        // January 2022 fix: Windows 10 1809-21H2, Server 2019/2022, original Windows 11.
+        { L"CVE-2022-21882", L"Win32k LPE (CVE-2021-1732 bypass)",
+          {{17763, 19044}, {20348, 20348}, {22000, 22000}}, false,
           { L"KB5009543", L"KB5009566" } },
-        { L"CVE-2020-1472",  L"Zerologon (Netlogon)",                   0, 0,
+        // Zerologon is a Netlogon flaw on domain controllers (Server 2019 and
+        // older); it is not a local privilege escalation on workstations.
+        { L"CVE-2020-1472",  L"Zerologon (Netlogon, domain controllers)", {{0, 17763}}, true,
           { L"KB4565349", L"KB4571756", L"KB4571694" } },
     };
 
-    StringVector hints;
+    std::vector<LpePatchHint> hints;
     for (const auto& e : table) {
-        if (e.min_build && os_build < e.min_build) continue;
-        if (e.max_build && os_build > e.max_build) continue;
+        if (e.dc_only && !is_domain_controller) continue;
+        if (!e.affected.empty()) {
+            bool in_range = false;
+            for (const auto& r : e.affected) {
+                if (os_build >= r.from && os_build <= r.to) { in_range = true; break; }
+            }
+            if (!in_range) continue;
+        }
         bool patched = false;
         for (const auto& kb : e.fix_kbs) {
             if (installed_kbs.count(kb)) { patched = true; break; }
@@ -620,7 +710,12 @@ StringVector MissingLpePatchHints(uint32_t os_build, const std::set<String>& ins
             if (i) fixes += L", ";
             fixes += e.fix_kbs[i];
         }
-        hints.push_back(String(e.cve) + L" (" + e.name + L") - no fixing hotfix found (" + fixes + L")");
+        LpePatchHint h;
+        h.cve = e.cve;
+        h.name = e.name;
+        h.fix_kbs = fixes;
+        h.message = String(e.cve) + L" (" + e.name + L") - no fixing hotfix found (" + fixes + L")";
+        hints.push_back(std::move(h));
     }
     return hints;
 }
