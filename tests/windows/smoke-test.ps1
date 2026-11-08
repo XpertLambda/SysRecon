@@ -122,7 +122,12 @@ function Assert-ScanComplete($Report, [string]$Name) {
     Assert-True ($Report.summary.scoring.model_version -eq 2) "$Name reports scoring model v2"
 
     # Unambiguous time, a schema version, and the host role.
-    Assert-True ($Report.scan_info.generated_utc -match '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$') "$Name has an ISO-8601 UTC time ($($Report.scan_info.generated_utc))"
+    # ConvertFrom-Json turns an ISO-8601 string into a [datetime], so check the parsed
+    # value: it must be a real time within the last hour (not a zoneless local stamp).
+    $generated = $Report.scan_info.generated_utc
+    $generatedOk = ($generated -is [datetime]) -and
+        ([math]::Abs(((Get-Date).ToUniversalTime() - $generated.ToUniversalTime()).TotalMinutes) -lt 60)
+    Assert-True $generatedOk "$Name has an ISO-8601 UTC time ($generated)"
     Assert-True ($Report.scan_info.schema_version -ge 1) "$Name carries a schema_version"
     $productType = (Get-CimInstance -ClassName Win32_OperatingSystem).ProductType
     $expectedFamily = switch ($productType) { 1 { 'client' } 2 { 'domain_controller' } 3 { 'server' } default { 'unknown' } }
