@@ -271,6 +271,9 @@ bool RegistryAnalyzer::AnalyzePolicies() {
                     result.details[L"key"] = subkey;
                     result.details[L"value"] = value_name;
                     result.details[L"data"] = value_str;
+                    // The Privilege Escalation module reports the same value (with
+                    // remediation); the engine keeps one of the two.
+                    result.fact_key = L"uac-disabled";
                     scan_results_.push_back(result);
                 }
                 

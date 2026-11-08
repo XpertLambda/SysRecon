@@ -66,6 +66,15 @@ namespace SysRecon {
         Critical = 3
     };
     
+    // How sure a check is that its finding is true and not expected. Scoring
+    // demotes a Low-confidence finding by one severity tier so a heuristic can
+    // never drive the headline rating (see core/scoring.h).
+    enum class Confidence {
+        Low = 0,      // Heuristic: name-based, assumed default, or unverified.
+        Medium = 1,   // Inferred from policy / registry configuration.
+        High = 2      // Effective state read directly from an authoritative API.
+    };
+
     // Module types
     enum class ModuleType {
         Accounts,
@@ -90,6 +99,19 @@ namespace SysRecon {
         // Phase 2: actionable output for pen-testers / defenders.
         String remediation;              // How to fix / harden the finding.
         String reference;                // MITRE ATT&CK technique, CVE, or doc link.
+        // Stable identity (see core/findings.h). `check_id` names the rule and
+        // must not vary per instance ("Account created", not "Account created:
+        // HOST\\user"); empty means "derive it from item_name". `instance_key`
+        // names the object the rule fired on (a CVE, a SID, a service short
+        // name) and must never contain this machine's own name. Two findings
+        // from one rule MUST differ in instance_key.
+        String check_id;
+        String instance_key;
+        Confidence confidence = Confidence::High;
+        // The underlying fact, when two modules can report the same one (e.g.
+        // "registry:HKLM\\...\\System!EnableLUA=0"). Findings sharing a fact_key
+        // are collapsed to one by Findings::DropDuplicateFacts. Empty = never merged.
+        String fact_key;
         std::chrono::system_clock::time_point timestamp;
     };
     

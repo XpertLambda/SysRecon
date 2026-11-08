@@ -133,9 +133,15 @@ String GetCurrentUserName() {
     return L"Unknown";
 }
 
-String GetWindowsVersion() {
-    DWORD major = 0, minor = 0, build = 0;
+namespace {
 
+struct RawOsVersion {
+    DWORD major = 0, minor = 0, build = 0;
+    DWORD product_type = 0;   // OSVERSIONINFOEX::wProductType
+};
+
+RawOsVersion QueryOsVersion() {
+    RawOsVersion v;
     HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
     if (ntdll) {
         typedef LONG (WINAPI* RtlGetVersionPtr)(PRTL_OSVERSIONINFOW);
@@ -146,30 +152,37 @@ String GetWindowsVersion() {
                 reinterpret_cast<void*>(GetProcAddress(ntdll, "RtlGetVersion")));
 
         if (RtlGetVersion) {
-            RTL_OSVERSIONINFOW rovi = {};
+            // The EX structure carries wProductType (workstation / domain
+            // controller / server); RtlGetVersion fills it when the size says so.
+            RTL_OSVERSIONINFOEXW rovi = {};
             rovi.dwOSVersionInfoSize = sizeof(rovi);
-            if (RtlGetVersion(&rovi) == 0) {
-                major = rovi.dwMajorVersion;
-                minor = rovi.dwMinorVersion;
-                build = rovi.dwBuildNumber;
+            if (RtlGetVersion(reinterpret_cast<PRTL_OSVERSIONINFOW>(&rovi)) == 0) {
+                v.major = rovi.dwMajorVersion;
+                v.minor = rovi.dwMinorVersion;
+                v.build = rovi.dwBuildNumber;
+                v.product_type = rovi.wProductType;
             }
         }
     }
+    return v;
+}
 
-    std::wstringstream ss;
-    ss << L"Windows ";
-    if (major == 10) {
-        ss << (build >= 22000 ? L"11" : L"10");
-    } else if (major == 6) {
-        if (minor == 3) ss << L"8.1";
-        else if (minor == 2) ss << L"8";
-        else if (minor == 1) ss << L"7";
-        else ss << L"Vista";
-    } else {
-        ss << major << L"." << minor;
-    }
-    ss << L" (Build " << build << L")";
-    return ss.str();
+}  // namespace
+
+OsClassification GetOsClassification() {
+    const RawOsVersion v = QueryOsVersion();
+    return ClassifyWindows(v.major, v.minor, v.build, v.product_type);
+}
+
+String GetWindowsVersion() {
+    const RawOsVersion v = QueryOsVersion();
+    const OsClassification c = ClassifyWindows(v.major, v.minor, v.build, v.product_type);
+    return c.name + L" (Build " + std::to_wstring(v.build) + L")";
+}
+
+uint32_t GetOsUbr() {
+    return static_cast<uint32_t>(ReadRegistryDword(
+        HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", L"UBR"));
 }
 
 String GetSystemDirectory() {
@@ -778,19 +791,7 @@ std::set<String> GetInstalledHotfixes() {
 }
 
 uint32_t GetOsBuildNumber() {
-    uint32_t build = 0;
-    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
-    if (ntdll) {
-        typedef LONG (WINAPI* RtlGetVersionPtr)(PRTL_OSVERSIONINFOW);
-        auto rtl = reinterpret_cast<RtlGetVersionPtr>(
-            reinterpret_cast<void*>(GetProcAddress(ntdll, "RtlGetVersion")));
-        if (rtl) {
-            RTL_OSVERSIONINFOW vi{};
-            vi.dwOSVersionInfoSize = sizeof(vi);
-            if (rtl(&vi) == 0) build = vi.dwBuildNumber;
-        }
-    }
-    return build;
+    return QueryOsVersion().build;
 }
 
 }

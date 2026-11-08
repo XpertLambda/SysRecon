@@ -491,6 +491,27 @@ void ScanEngine::CollectResults() {
         }
     }
 
+    // One fact, one finding: when two modules report the same underlying value
+    // (UAC disabled is read by both Registry and Privilege Escalation) keep one.
+    {
+        const size_t dropped = Findings::DropDuplicateFacts(scan_results_);
+        if (dropped > 0) {
+            SYSRECON_LOG_DEBUG(std::to_wstring(dropped) + L" duplicate finding(s) for the same fact were merged");
+        }
+    }
+
+    // Every finding needs a unique ID (baselines, --only/--skip and SARIF rule
+    // ids key on it). Rules that fire more than once set an instance_key
+    // themselves; this is the safety net, and a warning says which rule to fix.
+    {
+        const size_t renamed = Findings::EnsureUniqueIds(scan_results_);
+        if (renamed > 0) {
+            SYSRECON_LOG_WARNING(std::to_wstring(renamed) +
+                L" finding(s) shared an ID with another finding and were renamed; "
+                L"the rule that produced them should set an instance_key");
+        }
+    }
+
     // --only / --skip.
     filtered_count_ = Findings::ApplyFilters(scan_results_, only_patterns_, skip_patterns_);
     if (filtered_count_ > 0) {
@@ -534,6 +555,18 @@ bool ScanEngine::ExportResults(const String& format, const String& filename) {
     Modules::SystemInfo sys_info;
     sys_info.computer_name = Core::Utils::GetComputerName();
     sys_info.os_version = Core::Utils::GetWindowsVersion();
+    {
+        const auto os = Core::Utils::GetOsClassification();
+        switch (os.family) {
+            case Core::Utils::OsFamily::Client:           sys_info.os_family = L"client"; break;
+            case Core::Utils::OsFamily::Server:           sys_info.os_family = L"server"; break;
+            case Core::Utils::OsFamily::DomainController: sys_info.os_family = L"domain_controller"; break;
+            default:                                      sys_info.os_family = L"unknown"; break;
+        }
+        sys_info.os_name = os.name;
+        sys_info.os_build = std::to_wstring(Core::Utils::GetOsBuildNumber());
+        sys_info.os_ubr = Core::Utils::GetOsUbr();
+    }
     sys_info.architecture = Core::Utils::IsWow64Process() ? L"x86 (WOW64)" : L"x64";
     sys_info.scan_time = std::chrono::system_clock::now();
     sys_info.sysrecon_version = SYSRECON_VERSION;

@@ -17,6 +17,11 @@ struct PrivEscFinding {
     String remediation;     // How to close the gap.
     String reference;       // MITRE ATT&CK ID / CVE / docs link.
     SecurityLevel risk_level = SecurityLevel::Medium;
+    // Identity (see ScanResult): set instance_key whenever one check can fire
+    // more than once, e.g. a CVE id or a privilege name; never a hostname.
+    String instance_key;
+    Confidence confidence = Confidence::High;
+    String fact_key;   // Same fact reported by another module (see ScanResult).
 };
 
 // PrivEscAnalyzer performs read-only, host-local checks for common Windows

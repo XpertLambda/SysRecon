@@ -15,6 +15,14 @@ namespace Modules {
 namespace Text = Core::Text;
 
 namespace {
+// "DOMAIN\\user" -> "user"; a bare name is returned as is.
+SysRecon::String AccountNameWithoutDomain(const SysRecon::String& account) {
+    const size_t slash = account.rfind(L'\\');
+    return slash == SysRecon::String::npos ? account : account.substr(slash + 1);
+}
+}  // namespace
+
+namespace {
 
 constexpr const wchar_t* kModule = L"Event Logs";
 constexpr const wchar_t* kDefenderChannel = L"Microsoft-Windows-Windows Defender/Operational";
@@ -75,10 +83,13 @@ void EventLogAnalyzer::Cleanup() {
 
 void EventLogAnalyzer::Record(const String& item, const String& description, SecurityLevel risk,
                               const StringMap& details, const String& remediation,
-                              const String& reference) {
+                              const String& reference, const String& check_id,
+                              const String& instance_key) {
     ScanResult r;
     r.module_name = kModule;
     r.item_name = item;
+    r.check_id = check_id;
+    r.instance_key = instance_key;
     r.description = description;
     r.risk_level = risk;
     r.details = details;
@@ -475,7 +486,11 @@ bool EventLogAnalyzer::CheckAccountChanges() {
                SecurityLevel::Medium, d,
                L"Confirm the account was created by an authorised administrator for a known purpose; "
                L"disable it otherwise.",
-               L"T1136.001");
+               L"T1136.001",
+               // Identity: the rule plus the account name without its domain, which for a
+               // local account is the name of the machine it was created on (a hostname
+               // changes on rename / re-image and would change the ID with it).
+               L"Account created", AccountNameWithoutDomain(account));
     }
     for (const auto& [key, c] : added) {
         StringMap d = c.extra;
@@ -491,7 +506,11 @@ bool EventLogAnalyzer::CheckAccountChanges() {
                SecurityLevel::High, d,
                L"Confirm the membership change was authorised; remove the member otherwise and review "
                L"what the account did since.",
-               L"T1098");
+               L"T1098",
+               // The group's SID is the same on every host for built-in groups
+               // (S-1-5-32-544 is Administrators); the member is its bare name.
+               L"Added to privileged group",
+               c.extra.at(L"Group SID") + L"-" + AccountNameWithoutDomain(member));
     }
     if (truncated) {
         SYSRECON_LOG_WARNING(L"Account-change check: more than 1000 events; only the newest were reviewed");

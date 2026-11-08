@@ -61,6 +61,7 @@ add_library(sysrecon_core STATIC
     src/core/config.cpp
     src/core/scan_plan.cpp
     src/core/findings.cpp
+    src/core/scoring.cpp
 )
 target_include_directories(sysrecon_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -96,6 +97,7 @@ set(HEADERS
     include/core/text_utils.h
     include/core/scan_plan.h
     include/core/findings.h
+    include/core/scoring.h
     include/core/whitelist.h
     include/modules/accounts/user_enum.h
     include/modules/services/service_enum.h
@@ -172,6 +174,7 @@ if(SYSRECON_BUILD_TESTS AND NOT CMAKE_CROSSCOMPILING)
         tests/test_config.cpp
         tests/test_utils_crypto.cpp
         tests/test_findings.cpp
+        tests/test_scoring.cpp
     )
     target_link_libraries(sysrecon_tests PRIVATE sysrecon_core GTest::gtest_main)
     # Lets tests validate the config.json that actually ships.

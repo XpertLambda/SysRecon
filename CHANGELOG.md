@@ -4,6 +4,58 @@ All notable changes to SysRecon are documented here.
 
 ## [Unreleased]
 
+Engine accuracy release (milestone M0). Findings, scores and baselines change as
+described below; reports gain fields but lose none.
+
+### Fixed
+
+- **Overall rating contradicted the findings.** 1.8.0 summed
+  `critical*25 + high*10 + medium*4 + low` and capped at 100, so a Windows 11
+  host with no Critical and seven High findings printed "score 100, rating
+  Critical". The rating is now the worst *effective* severity tier present and
+  the score stays inside that tier's band (Critical 85-100, High 60-84,
+  Moderate 30-59, Low 5-29, Minimal 0); repeats of one rule count less; a
+  low-confidence finding counts one tier lower. `summary.scoring` in the JSON
+  names the model (`model_version: 2`). **Scripts that key on `rating` or
+  `risk_score` will see different values.**
+- **"Potential missing LPE patch" on current Windows.** The CVE table applied to
+  every build, so Windows 11 25H2 (26200) got six findings about 2020-2022
+  vulnerabilities. Each CVE now lists the builds that existed before its fix and
+  is only a candidate there (Windows 11, Server 2022+ and Windows 10 21H2+ no
+  longer match the 2021 issues). Zerologon (CVE-2020-1472) is a domain-controller
+  flaw and is reported only on domain controllers. The findings are low
+  confidence ("verify"), one per CVE.
+- **Finding IDs were not unique or stable.** Six patch findings and two
+  credential-artefact findings shared one ID, and event-log IDs contained the
+  machine name, so renaming or re-imaging a host changed them. A rule that can
+  fire several times now gives each finding an instance part
+  (`privilege-escalation/potential-missing-lpe-patch#cve-2021-34527`,
+  `event-logs/account-created#vagrant`), and the engine renames any remaining
+  duplicate deterministically and logs a warning. Non-ASCII names are encoded
+  (`u7528-u6237`) instead of being dropped, so they no longer collide.
+  `--baseline` still matches 1.8.0 reports: an instanced finding matches a 1.8.0
+  entry for the same rule. Event-log account findings have new IDs, so an old
+  baseline shows them once as resolved plus new.
+- **Windows Server was reported as "Windows 10/11"** (Server 2025 and Windows 11
+  24H2 are both build 26100). The OS name now uses the product type; the JSON
+  gains `system_info.os_name`, `os_family` (`client`, `server`,
+  `domain_controller`), `os_build` and `os_ubr`.
+- **UAC-disabled was reported twice** (Registry and Privilege Escalation). Two
+  modules reporting the same underlying value are now merged to one finding, the
+  one with remediation.
+- **Ambiguous time.** `scan_info.generated_utc` (ISO-8601 UTC) and
+  `utc_offset_minutes` are added next to the zoneless `timestamp`, which is kept
+  for file names and older tooling. `scan_info.schema_version` (1) is new.
+
+### Added
+
+- Native unit tests for scoring (reference values, a property test over random
+  finding sets), identity (instances, uniqueness, Unicode, 1.8 baselines), the
+  patch table (modern builds, build ranges, role), OS classification and ISO
+  timestamps. The Windows smoke test asserts unique IDs, rating/score
+  consistency, the detected host role, no stale patch findings on modern builds
+  and a single UAC finding.
+
 ## [1.8.0] — 2026-11-02
 
 ### Added

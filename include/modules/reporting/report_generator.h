@@ -2,6 +2,7 @@
 
 #include "../../sysrecon.h"
 #include "../../core/findings.h"
+#include "../../core/scoring.h"
 
 namespace SysRecon {
 namespace Modules {
@@ -26,8 +27,11 @@ struct ReportConfig {
 struct SystemInfo {
     String computer_name;
     String domain_name;
-    String os_version;
+    String os_version;      // Display string, e.g. "Windows 11 (Build 26200)".
+    String os_name;         // "Windows 11", "Windows Server 2025", ...
+    String os_family;       // client | server | domain_controller | unknown
     String os_build;
+    uint32_t os_ubr = 0;    // Update Build Revision (26200.<ubr>); 0 = unknown.
     String architecture;
     String processor;
     String memory_total;
@@ -81,10 +85,10 @@ public:
     bool GenerateSARIF(const String& filename);              // SARIF 2.1.0
     bool GenerateAttackNavigatorLayer(const String& filename); // MITRE ATT&CK Navigator layer
 
-    // Weighted 0-100 risk score (critical*25 + high*10 + medium*4 + low*1,
-    // capped) and its rating label. Shared by the summary of every format.
-    int CalculateRiskScore() const;
-    String RiskRating(int score) const;
+    // Host risk score (0-100) and rating, scoring model v2 (see core/scoring.h):
+    // the rating is the worst effective severity tier present and the score
+    // stays inside that tier's band. Shared by the summary of every format.
+    Core::Scoring::Result RiskAssessment() const;
 
 private:
     ReportConfig config_;

@@ -48,9 +48,13 @@ private:
     String WindowLabel() const;
     bool ReportQueryFailure(const String& check, const String& channel, QueryStatus status);
 
+    // `check_id` / `instance_key` give the finding a stable identity when the
+    // item text varies per host or account (see ScanResult): the ID must not
+    // contain the machine's own name.
     void Record(const String& item, const String& description, SecurityLevel risk,
                 const StringMap& details, const String& remediation = L"",
-                const String& reference = L"");
+                const String& reference = L"", const String& check_id = L"",
+                const String& instance_key = L"");
 
     ScanResults scan_results_;
     size_t lookback_days_ = 7;
