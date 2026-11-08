@@ -125,8 +125,13 @@ function Assert-ScanComplete($Report, [string]$Name) {
     # ConvertFrom-Json turns an ISO-8601 string into a [datetime], so check the parsed
     # value: it must be a real time within the last hour (not a zoneless local stamp).
     $generated = $Report.scan_info.generated_utc
-    $generatedOk = ($generated -is [datetime]) -and
-        ([math]::Abs(((Get-Date).ToUniversalTime() - $generated.ToUniversalTime()).TotalMinutes) -lt 60)
+    if ($generated -is [string]) {
+        # Windows PowerShell 5.1 leaves it as text.
+        $generatedOk = $generated -match '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$'
+    } else {
+        $generatedOk = ($generated -is [datetime]) -and
+            ([math]::Abs(((Get-Date).ToUniversalTime() - $generated.ToUniversalTime()).TotalMinutes) -lt 60)
+    }
     Assert-True $generatedOk "$Name has an ISO-8601 UTC time ($generated)"
     Assert-True ($Report.scan_info.schema_version -ge 1) "$Name carries a schema_version"
     $productType = (Get-CimInstance -ClassName Win32_OperatingSystem).ProductType
